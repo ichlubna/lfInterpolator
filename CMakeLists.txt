@@ -8,6 +8,11 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/CMakeModules")
 set(SOURCES 
 src/lfLoader.cpp
 src/main.cpp
+src/interpolator.cpp
+src/libs/arguments/arguments.hpp
+src/libs/loadingBar/loadingbar.hpp
+src/libs/stb_image.h
+src/libs/stb_image_write.h
 )
 
 find_package(glm REQUIRED)
