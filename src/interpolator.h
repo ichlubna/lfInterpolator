@@ -1,3 +1,4 @@
+#include <vector>
 #include <glm/glm.hpp>
 #include <string>
 
@@ -5,12 +6,25 @@ class Interpolator
 {
     public:
     Interpolator(std::string inputPath);
-    void interpolateTensor(std::string outputPath, std::string trajectory);
-    void interpolateClassic(std::string outputPath, std::string trajectory);
+    ~Interpolator();
+    void interpolate(std::string outputPath, std::string trajectory, bool tensor);
 
     private:
-    glm::uvec2 colsRows;
+    std::vector<int*> outputArrays;
+    std::vector<int> surfaces;
+    std::vector<int> textures;
+    int *weights;
+    size_t channels{4};
+    size_t viewCount{8};
+    glm::ivec2 colsRows;
     std::string input;
     void init();
-    glm::vec4 interpretTrajectory(std::string trajectory);
+    void loadGPUData();
+    void loadGPUConstants(glm::ivec2 imgResolution, glm::ivec2 gridSize);
+    void loadGPUWeights(glm::vec4 startEndPoints);
+    std::vector<float> generateWeights(glm::vec2 coords);
+    std::vector<glm::vec2> generateTrajectory(glm::vec4 startEndPoints);
+    glm::vec4 interpretTrajectory(std::string trajectory);    
+    std::pair<int, int*> createSurfaceObject(glm::ivec3 size);
+    int createTextureObject(const uint8_t *data, glm::ivec3 size);
 };

@@ -1,6 +1,7 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 #include <cstring>
+#include "libs/loadingBar/loadingbar.hpp"
 #include "lfLoader.h"
 
 const std::set<std::filesystem::path> LfLoader::listPath(std::string path) const
@@ -40,13 +41,16 @@ void LfLoader::initGrid(glm::uvec2 inColsRows)
 }
 
 void LfLoader::loadData(std::string path)
-{
+{  
     auto files = listPath(path);
     initGrid(parseFilename(*files.rbegin()));
-    
+
+    std::cout << "Loading images..." << std::endl;
+    LoadingBar bar(colsRows.x*colsRows.y);
     for(auto const &file : files)
     {
         auto coords = parseFilename(file);
-        loadImage(path+"/"+file.string(), coords);   
+        loadImage(path+"/"+file.string(), coords);  
+        bar.add(); 
     }
 }

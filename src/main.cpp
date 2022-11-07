@@ -26,8 +26,7 @@ int main(int argc, char **argv)
     try
     {
         Interpolator interpolator(path);
-        interpolator.interpolateClassic(outputPath, trajectory);
-        //interpolator.interpolateTensor(outputPath, trajectory);        
+        interpolator.interpolate(outputPath, trajectory, false);
     }
     catch(const std::exception &e)
     {
