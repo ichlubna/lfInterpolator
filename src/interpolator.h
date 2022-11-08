@@ -17,11 +17,13 @@ class Interpolator
     size_t channels{4};
     size_t viewCount{8};
     glm::ivec2 colsRows;
+    glm::ivec3 resolution;
     std::string input;
     void init();
     void loadGPUData();
     void loadGPUConstants(glm::ivec2 imgResolution, glm::ivec2 gridSize);
     void loadGPUWeights(glm::vec4 startEndPoints);
+    void storeResults(std::string path);
     std::vector<float> generateWeights(glm::vec2 coords);
     std::vector<glm::vec2> generateTrajectory(glm::vec4 startEndPoints);
     glm::vec4 interpretTrajectory(std::string trajectory);    

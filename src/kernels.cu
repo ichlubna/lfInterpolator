@@ -16,4 +16,30 @@ namespace Kernels
     extern __shared__ half localMemory[];
 
 
+    __device__ bool coordsOutside(int2 coords)
+    {
+        int2 resolution = imgRes();
+        if(coords.x >= resolution.x || coords.y >= resolution.y)
+            return false;
+    }
+
+    __device__ int2 getImgCoords()
+    {
+        int2 coords;
+        coords.x = (threadIdx.x + blockIdx.x * blockDim.x);
+        coords.y = ((threadIdx.y + blockIdx.y * blockDim.y));
+        return coords;
+    }
+
+    __global__ void process(cudaTextureObject_t *textures, cudaSurfaceObject_t *surfaces, half *weights)
+    {
+        int2 coords = getImgCoords();
+        if(coordsOutside(coords))
+            return;
+
+        auto px = tex2D<uchar4>(textures[0], coords.x+0.5f, coords.y+0.5f);
+        surf2Dwrite<uchar4>(px, surfaces[0], coords.x, coords.y, cudaBoundaryModeTrap);
+        
+    }
+
 }

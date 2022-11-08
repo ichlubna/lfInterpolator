@@ -1,10 +1,12 @@
-#define GLM_SWIZZLE
+#define GLM_FORCE_SWIZZLE
 #include <sstream>
 #include <cuda_runtime.h>
 #include "lfLoader.h"
 #include "interpolator.h"
 #include "kernels.cu"
 #include "libs/loadingBar/loadingbar.hpp"
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "libs/stb_image_write.h"
 
 Interpolator::Interpolator(std::string inputPath) : input{inputPath}
 {
@@ -18,6 +20,8 @@ Interpolator::~Interpolator()
 
 void Interpolator::init()
 {
+    loadGPUData();
+    loadGPUConstants(resolution.xy(), colsRows);
 }
 
 int Interpolator::createTextureObject(const uint8_t *data, glm::ivec3 size)
@@ -62,18 +66,18 @@ void Interpolator::loadGPUData()
     LfLoader lfLoader;
     colsRows = lfLoader.getColsRows();
     lfLoader.loadData(input);
-    glm::ivec3 resolution = lfLoader.imageResolution();
+    resolution = lfLoader.imageResolution();
 
-    std::cout << "Uploading data to GPU...";
-    LoadingBar bar(lfLoader.imageCount()+1);
+    std::cout << "Uploading data to GPU..." << std::endl;
+    LoadingBar bar(lfLoader.imageCount()+viewCount);
 
-    for(int i=0; i<viewCount; i++)
+    for(size_t i=0; i<viewCount; i++)
     {
         auto surface = createSurfaceObject(resolution);
         surfaces.push_back(surface.first);  
         outputArrays.push_back(surface.second);
+        bar.add();
     }
-    bar.add();
  
     for(int col=0; col<colsRows.x; col++)
         for(int row=0; row<colsRows.y; row++)
@@ -110,7 +114,7 @@ std::vector<glm::vec2> Interpolator::generateTrajectory(glm::vec4 startEndPoints
 {
     glm::vec2 step = (startEndPoints.zw() - startEndPoints.xy())/static_cast<float>(viewCount);
     std::vector<glm::vec2> trajectory;
-    for(int i=0; i<viewCount; i++)
+    for(size_t i=0; i<viewCount; i++)
         trajectory.push_back(startEndPoints.xy()+step*static_cast<float>(i));
     return trajectory;
 }
@@ -135,11 +139,20 @@ void Interpolator::interpolate(std::string outputPath, std::string trajectory, b
 {
     auto trajectoryPoints = interpretTrajectory(trajectory);
     loadGPUWeights(trajectoryPoints);
+    
+    dim3 dimBlock(8, 8, 1);
+    dim3 dimGrid(resolution.x/dimBlock.x, resolution.y/dimBlock.y, 1);
+    Kernels::process<<<dimGrid, dimBlock, 0>>>(reinterpret_cast<cudaTextureObject_t*>(textures.data()), reinterpret_cast<cudaSurfaceObject_t*>(surfaces.data()), reinterpret_cast<half*>(weights));
 }
 
-void interpolateTensor(std::string outputPath, std::string trajectory)
+void Interpolator::storeResults(std::string path)
 {
-
+    std::vector<uint8_t> data(resolution.x*resolution.y*resolution.z);
+    for(size_t i=0; i<surfaces.size(); i++) 
+    {
+        cudaMemcpy(data.data(), outputArrays[i], data.size(), cudaMemcpyDeviceToHost);
+        stbi_write_jpg((path+std::to_string(i)+".png").c_str(), resolution.x, resolution.y, resolution.z, data.data(), resolution.x*resolution.z);
+    }
 }
 
 glm::vec4 Interpolator::interpretTrajectory(std::string trajectory)

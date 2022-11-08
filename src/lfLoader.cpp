@@ -27,14 +27,14 @@ void LfLoader::loadImage(std::string path, glm::uvec2 coords)
     uint8_t *pixels = stbi_load(path.c_str(), &resolution.x, &resolution.y, &resolution.z, STBI_rgb_alpha);
     if(pixels == nullptr)
         throw std::runtime_error("Cannot load image " + path);
-    size_t size = glm::dot(glm::vec3(resolution), glm::vec3(1));
+    size_t size = resolution.x*resolution.y*resolution.z;
     grid[coords.x][coords.y].resize(size);
     std::memcpy(grid[coords.x][coords.y].data(), pixels, size);
 }
 
 void LfLoader::initGrid(glm::uvec2 inColsRows)
 {
-    colsRows = inColsRows;
+    colsRows = inColsRows+glm::uvec2(1);
     grid.resize(colsRows.x);
     for(auto &row : grid)
         row.resize(colsRows.y);
@@ -46,7 +46,7 @@ void LfLoader::loadData(std::string path)
     initGrid(parseFilename(*files.rbegin()));
 
     std::cout << "Loading images..." << std::endl;
-    LoadingBar bar(colsRows.x*colsRows.y);
+    LoadingBar bar(files.size());
     for(auto const &file : files)
     {
         auto coords = parseFilename(file);
