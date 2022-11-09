@@ -13,7 +13,7 @@ const std::set<std::filesystem::path> LfLoader::listPath(std::string path) const
     return sorted;
 }
 
-glm::uvec2 LfLoader::parseFilename(std::string name) const
+glm::ivec2 LfLoader::parseFilename(std::string name) const
 {
     int delimiterPos = name.find('_');
     int extensionPos = name.find('.');
@@ -29,7 +29,7 @@ void LfLoader::loadImage(std::string path, glm::uvec2 coords)
         throw std::runtime_error("Cannot load image " + path);
     size_t size = resolution.x*resolution.y*resolution.z;
     grid[coords.x][coords.y].resize(size);
-    std::memcpy(grid[coords.x][coords.y].data(), pixels, size);
+    std::copy(&pixels[0], &pixels[size], std::back_inserter(grid[coords.x][coords.y]));
 }
 
 void LfLoader::initGrid(glm::uvec2 inColsRows)

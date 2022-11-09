@@ -27,7 +27,7 @@ namespace Kernels
     {
         int2 coords;
         coords.x = (threadIdx.x + blockIdx.x * blockDim.x);
-        coords.y = ((threadIdx.y + blockIdx.y * blockDim.y));
+        coords.y = (threadIdx.y + blockIdx.y * blockDim.y);
         return coords;
     }
 
@@ -37,7 +37,8 @@ namespace Kernels
         if(coordsOutside(coords))
             return;
 
-        auto px = tex2D<uchar4>(textures[0], coords.x+0.5f, coords.y+0.5f);
+        //auto px = tex2D<uchar4>(textures[0], coords.x+0.5f, coords.y+0.5f);
+        uchar4 px{255,0,255,255};
         surf2Dwrite<uchar4>(px, surfaces[0], coords.x, coords.y, cudaBoundaryModeTrap);
         
     }

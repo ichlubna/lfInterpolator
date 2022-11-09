@@ -11,8 +11,8 @@ class Interpolator
 
     private:
     std::vector<int*> outputArrays;
-    std::vector<int> surfaces;
-    std::vector<int> textures;
+    void *surfaceObjectsArr;
+    void *textureObjectsArr;
     int *weights;
     size_t channels{4};
     size_t viewCount{8};
@@ -21,7 +21,7 @@ class Interpolator
     std::string input;
     void init();
     void loadGPUData();
-    void loadGPUConstants(glm::ivec2 imgResolution, glm::ivec2 gridSize);
+    void loadGPUConstants();
     void loadGPUWeights(glm::vec4 startEndPoints);
     void storeResults(std::string path);
     std::vector<float> generateWeights(glm::vec2 coords);
