@@ -37,9 +37,8 @@ namespace Kernels
         if(coordsOutside(coords))
             return;
 
-        //auto px = tex2D<uchar4>(textures[0], coords.x+0.5f, coords.y+0.5f);
-        uchar4 px{255,0,255,255};
-        surf2Dwrite<uchar4>(px, surfaces[0], coords.x, coords.y, cudaBoundaryModeTrap);
+        auto px = tex2D<uchar4>(textures[0], coords.x+0.5f, coords.y+0.5f);
+        surf2Dwrite<uchar4>(px, surfaces[0], coords.x*sizeof(uchar4), coords.y);
         
     }
 

@@ -24,11 +24,12 @@ glm::ivec2 LfLoader::parseFilename(std::string name) const
 
 void LfLoader::loadImage(std::string path, glm::uvec2 coords)
 {
+    constexpr int RGBA_CHANNELS{4};
     uint8_t *pixels = stbi_load(path.c_str(), &resolution.x, &resolution.y, &resolution.z, STBI_rgb_alpha);
     if(pixels == nullptr)
         throw std::runtime_error("Cannot load image " + path);
+    resolution.z = RGBA_CHANNELS;
     size_t size = resolution.x*resolution.y*resolution.z;
-    grid[coords.x][coords.y].resize(size);
     std::copy(&pixels[0], &pixels[size], std::back_inserter(grid[coords.x][coords.y]));
 }
 

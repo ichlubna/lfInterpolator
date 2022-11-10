@@ -51,7 +51,7 @@ int Interpolator::createTextureObject(const uint8_t *data, glm::ivec3 size)
 {
     cudaChannelFormatDesc channels = cudaCreateChannelDesc(8, 8, 8, 8, cudaChannelFormatKindUnsigned);
     cudaArray *arr;
-    cudaMallocArray(&arr, &channels, size.x, size.y, cudaArrayDefault);
+    cudaMallocArray(&arr, &channels, size.x, size.y);
     cudaMemcpy2DToArray(arr, 0, 0, data, size.x*size.z, size.x*size.z, size.y, cudaMemcpyHostToDevice);
     
     cudaResourceDesc texRes;
@@ -60,10 +60,8 @@ int Interpolator::createTextureObject(const uint8_t *data, glm::ivec3 size)
     texRes.res.array.array = arr;
     cudaTextureDesc texDescr;
     memset(&texDescr, 0, sizeof(cudaTextureDesc));
-    texDescr.normalizedCoords = true;
-    texDescr.filterMode = cudaFilterModeLinear;
-    texDescr.addressMode[0] = cudaAddressModeWrap;
-    texDescr.addressMode[1] = cudaAddressModeWrap;
+    texDescr.addressMode[0] = cudaAddressModeClamp;
+    texDescr.addressMode[1] = cudaAddressModeClamp;
     texDescr.readMode = cudaReadModeElementType;
     cudaTextureObject_t texObj{0};
     cudaCreateTextureObject(&texObj, &texRes, &texDescr, NULL);
@@ -95,7 +93,7 @@ void Interpolator::loadGPUData()
     std::cout << "Uploading data to GPU..." << std::endl;
     LoadingBar bar(lfLoader.imageCount()+viewCount);
 
-    std::vector<int> surfaces;
+    std::vector<cudaSurfaceObject_t> surfaces;
     for(size_t i=0; i<viewCount; i++)
     {
         auto surface = createSurfaceObject(resolution);
@@ -106,7 +104,7 @@ void Interpolator::loadGPUData()
     cudaMalloc(&surfaceObjectsArr, surfaces.size()*sizeof(cudaTextureObject_t));
     cudaMemcpy(surfaceObjectsArr, surfaces.data(), surfaces.size()*sizeof(cudaSurfaceObject_t), cudaMemcpyHostToDevice);
 
-    std::vector<int> textures;
+    std::vector<cudaTextureObject_t> textures;
     for(int col=0; col<colsRows.x; col++)
         for(int row=0; row<colsRows.y; row++)
         { 
