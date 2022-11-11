@@ -30,7 +30,7 @@ void LfLoader::loadImage(std::string path, glm::uvec2 coords)
         throw std::runtime_error("Cannot load image " + path);
     resolution.z = RGBA_CHANNELS;
     size_t size = resolution.x*resolution.y*resolution.z;
-    std::copy(&pixels[0], &pixels[size], std::back_inserter(grid[coords.x][coords.y]));
+    grid[coords.x][coords.y] = std::vector<uint8_t>(pixels, pixels+size);
 }
 
 void LfLoader::initGrid(glm::uvec2 inColsRows)

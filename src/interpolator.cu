@@ -43,8 +43,10 @@ Interpolator::~Interpolator()
 
 void Interpolator::init()
 {
+    viewCount = Kernels::VIEW_COUNT;
     loadGPUData();
     loadGPUConstants();
+    sharedSize = sizeof(half)*colsRows.x*colsRows.y*viewCount;
 }
 
 int Interpolator::createTextureObject(const uint8_t *data, glm::ivec3 size)
@@ -94,7 +96,7 @@ void Interpolator::loadGPUData()
     LoadingBar bar(lfLoader.imageCount()+viewCount);
 
     std::vector<cudaSurfaceObject_t> surfaces;
-    for(size_t i=0; i<viewCount; i++)
+    for(int i=0; i<viewCount; i++)
     {
         auto surface = createSurfaceObject(resolution);
         surfaces.push_back(surface.first);  
@@ -117,7 +119,7 @@ void Interpolator::loadGPUData()
 
 void Interpolator::loadGPUConstants()
 {
-    std::vector<int> values{resolution.x, resolution.y, colsRows.x, colsRows.y};
+    std::vector<int> values{resolution.x, resolution.y, colsRows.x, colsRows.y, viewCount, colsRows.x*colsRows.y, colsRows.x*colsRows.y*viewCount};
     cudaMemcpyToSymbol(Kernels::constants, values.data(), values.size() * sizeof(int));
 }
 
@@ -134,7 +136,7 @@ std::vector<float> Interpolator::generateWeights(glm::vec2 coords)
             weightVals.push_back(weight);
         }
     for(auto &weight : weightVals)
-        weight /= weightSum;
+        weight /= weightSum; 
     return weightVals;
 }
 
@@ -142,7 +144,7 @@ std::vector<glm::vec2> Interpolator::generateTrajectory(glm::vec4 startEndPoints
 {
     glm::vec2 step = (startEndPoints.zw() - startEndPoints.xy())/static_cast<float>(viewCount);
     std::vector<glm::vec2> trajectory;
-    for(size_t i=0; i<viewCount; i++)
+    for(int i=0; i<viewCount; i++)
         trajectory.push_back(startEndPoints.xy()+step*static_cast<float>(i));
     return trajectory;
 }
@@ -160,7 +162,7 @@ void Interpolator::loadGPUWeights(glm::vec4 startEndPoints)
             weightsLine.push_back(static_cast<half>(w));
         weightsMatrix.insert(weightsMatrix.end(), weightsLine.begin(), weightsLine.end());
     }
-    cudaMemcpy(weights, weightsMatrix.data(), weightsMatrix.size(), cudaMemcpyHostToDevice);
+    cudaMemcpy(weights, weightsMatrix.data(), weightsMatrix.size()*sizeof(half), cudaMemcpyHostToDevice);
 }
 
 void Interpolator::interpolate(std::string outputPath, std::string trajectory, bool tensor)
@@ -168,11 +170,11 @@ void Interpolator::interpolate(std::string outputPath, std::string trajectory, b
     auto trajectoryPoints = interpretTrajectory(trajectory);
     loadGPUWeights(trajectoryPoints);
     
-    dim3 dimBlock(8, 8, 1);
+    dim3 dimBlock(16, 16, 1);
     dim3 dimGrid(resolution.x/dimBlock.x, resolution.y/dimBlock.y, 1);
 
     Timer timer;
-    Kernels::process<<<dimGrid, dimBlock, 0>>>(reinterpret_cast<cudaTextureObject_t*>(textureObjectsArr), reinterpret_cast<cudaSurfaceObject_t*>(surfaceObjectsArr), reinterpret_cast<half*>(weights));
+    Kernels::process<<<dimGrid, dimBlock, sharedSize>>>(reinterpret_cast<cudaTextureObject_t*>(textureObjectsArr), reinterpret_cast<cudaSurfaceObject_t*>(surfaceObjectsArr), reinterpret_cast<half*>(weights));
     std::cout << "Elapsed time: " << timer.stop() << " ms" << std::endl;
     storeResults(outputPath);
 }
@@ -182,7 +184,7 @@ void Interpolator::storeResults(std::string path)
     std::cout << "Storing results..." << std::endl;
     LoadingBar bar(viewCount);
     std::vector<uint8_t> data(resolution.x*resolution.y*resolution.z, 255);
-    for(size_t i=0; i<viewCount; i++) 
+    for(int i=0; i<viewCount; i++) 
     {
         cudaMemcpy2DFromArray(data.data(), resolution.x*resolution.z, reinterpret_cast<cudaArray*>(outputArrays[i]), 0, 0, resolution.x*resolution.z, resolution.y, cudaMemcpyDeviceToHost);
         stbi_write_png((path+std::to_string(i)+".png").c_str(), resolution.x, resolution.y, resolution.z, data.data(), resolution.x*resolution.z);

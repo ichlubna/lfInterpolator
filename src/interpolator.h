@@ -15,7 +15,8 @@ class Interpolator
     void *textureObjectsArr;
     int *weights;
     size_t channels{4};
-    size_t viewCount{8};
+    int viewCount{8};
+    size_t sharedSize{0};
     glm::ivec2 colsRows;
     glm::ivec3 resolution;
     std::string input;
