@@ -11,7 +11,7 @@ int main(int argc, char **argv)
     std::string helpText{ "Usage:\n"
                           "Example: lfInterpolator -i /MyAmazingMachine/thoseImages -t 0.0,0.0,1.0,1.0  -o ./outputs\n"
                           "-i - folder with lf grid images\n"
-                          "-t - trajectory of the camera in normalized coordinates of the grid format: startCol,startRow,endCol,endRow"
+                          "-t - trajectory of the camera in normalized coordinates of the grid format: startCol,startRow,endCol,endRow\n"
                           "-o - output path\n"
                         };
     if(args.printHelpIfPresent(helpText))
