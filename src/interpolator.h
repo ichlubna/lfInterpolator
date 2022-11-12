@@ -10,6 +10,7 @@ class Interpolator
     void interpolate(std::string outputPath, std::string trajectory, bool tensor);
 
     private:
+    size_t kernelBenchmarkRuns{10};
     std::vector<int*> outputArrays;
     void *surfaceObjectsArr;
     void *textureObjectsArr;

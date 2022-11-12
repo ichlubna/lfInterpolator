@@ -175,13 +175,13 @@ namespace Kernels
         if constexpr (GUESS_HANDLES)
             return PixelArray<T>{tex2D<uchar4>(textures[imageID], coords.x+0.5f, coords.y+0.5f)};
         else    
-            return PixelArray<T>{tex2D<uchar4>(imageID+viewCount(), coords.x+0.5f, coords.y+0.5f)};
+            return PixelArray<T>{tex2D<uchar4>(imageID, coords.x+0.5f, coords.y+0.5f)};
     }
 
     __device__ void storePx(uchar4 px, int imageID, int2 coords, cudaSurfaceObject_t *surfaces)
     {
         if constexpr (GUESS_HANDLES)
-            surf2Dwrite<uchar4>(px, imageID, coords.x*sizeof(uchar4), coords.y);
+            surf2Dwrite<uchar4>(px, imageID*viewCount(), coords.x*sizeof(uchar4), coords.y);
         else    
             surf2Dwrite<uchar4>(px, surfaces[imageID], coords.x*sizeof(uchar4), coords.y);
     }

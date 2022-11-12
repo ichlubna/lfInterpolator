@@ -13,6 +13,7 @@ int main(int argc, char **argv)
                           "-i - folder with lf grid images\n"
                           "-t - trajectory of the camera in normalized coordinates of the grid format: startCol,startRow,endCol,endRow\n"
                           "-o - output path\n"
+                          "--tensor - tensor cores are used when present\n"
                         };
     if(args.printHelpIfPresent(helpText))
         return 0;
@@ -26,7 +27,7 @@ int main(int argc, char **argv)
     try
     {
         Interpolator interpolator(path);
-        interpolator.interpolate(outputPath, trajectory, false);
+        interpolator.interpolate(outputPath, trajectory, args["--tensor"]);
     }
     catch(const std::exception &e)
     {

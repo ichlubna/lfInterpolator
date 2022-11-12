@@ -1,9 +1,9 @@
 #define GLM_FORCE_SWIZZLE
 #include <sstream>
 #include <cuda_runtime.h>
-#include "lfLoader.h"
 #include "interpolator.h"
 #include "kernels.cu"
+#include "lfLoader.h"
 #include "libs/loadingBar/loadingbar.hpp"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "libs/stb_image_write.h"
@@ -95,6 +95,16 @@ void Interpolator::loadGPUData()
     std::cout << "Uploading data to GPU..." << std::endl;
     LoadingBar bar(lfLoader.imageCount()+viewCount);
 
+    std::vector<cudaTextureObject_t> textures;
+    for(int col=0; col<colsRows.x; col++)
+        for(int row=0; row<colsRows.y; row++)
+        { 
+            textures.push_back(createTextureObject(lfLoader.image({col, row}).data(), resolution)); 
+            bar.add();
+        }
+    cudaMalloc(&textureObjectsArr, textures.size()*sizeof(cudaTextureObject_t));
+    cudaMemcpy(textureObjectsArr, textures.data(), textures.size()*sizeof(cudaTextureObject_t), cudaMemcpyHostToDevice);
+    
     std::vector<cudaSurfaceObject_t> surfaces;
     for(int i=0; i<viewCount; i++)
     {
@@ -105,16 +115,6 @@ void Interpolator::loadGPUData()
     }
     cudaMalloc(&surfaceObjectsArr, surfaces.size()*sizeof(cudaTextureObject_t));
     cudaMemcpy(surfaceObjectsArr, surfaces.data(), surfaces.size()*sizeof(cudaSurfaceObject_t), cudaMemcpyHostToDevice);
-
-    std::vector<cudaTextureObject_t> textures;
-    for(int col=0; col<colsRows.x; col++)
-        for(int row=0; row<colsRows.y; row++)
-        { 
-            textures.push_back(createTextureObject(lfLoader.image({col, row}).data(), resolution)); 
-            bar.add();
-        }
-    cudaMalloc(&textureObjectsArr, textures.size()*sizeof(cudaTextureObject_t));
-    cudaMemcpy(textureObjectsArr, textures.data(), textures.size()*sizeof(cudaTextureObject_t), cudaMemcpyHostToDevice);
 }
 
 void Interpolator::loadGPUConstants()
@@ -173,9 +173,16 @@ void Interpolator::interpolate(std::string outputPath, std::string trajectory, b
     dim3 dimBlock(16, 16, 1);
     dim3 dimGrid(resolution.x/dimBlock.x, resolution.y/dimBlock.y, 1);
 
-    Timer timer;
-    Kernels::process<<<dimGrid, dimBlock, sharedSize>>>(reinterpret_cast<cudaTextureObject_t*>(textureObjectsArr), reinterpret_cast<cudaSurfaceObject_t*>(surfaceObjectsArr), reinterpret_cast<half*>(weights));
-    std::cout << "Elapsed time: " << timer.stop() << " ms" << std::endl;
+    std::cout << "Elapsed time: "<<std::endl;
+    for(size_t i=0; i<kernelBenchmarkRuns; i++)
+    {
+        Timer timer;
+        if(tensor)
+            Kernels::processTensor<<<dimGrid, dimBlock, sharedSize>>>(reinterpret_cast<cudaTextureObject_t*>(textureObjectsArr), reinterpret_cast<cudaSurfaceObject_t*>(surfaceObjectsArr), reinterpret_cast<half*>(weights));
+        else
+            Kernels::process<<<dimGrid, dimBlock, sharedSize>>>(reinterpret_cast<cudaTextureObject_t*>(textureObjectsArr), reinterpret_cast<cudaSurfaceObject_t*>(surfaceObjectsArr), reinterpret_cast<half*>(weights));
+        std::cout << std::to_string(i) << ": " << timer.stop() << " ms" << std::endl;
+    }
     storeResults(outputPath);
 }
 
