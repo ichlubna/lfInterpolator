@@ -16,6 +16,14 @@ namespace Kernels
     __device__ int gridSize(){return constants[5];}
     __device__ constexpr int viewCount(){return VIEW_COUNT;}
 
+    __device__ constexpr int MAX_IMAGES{256};
+    __constant__ half2 offsets[MAX_IMAGES];
+    __device__ float2 focusCoords(int2 coords, int imageID)
+    {
+        auto offset = offsets[imageID];
+        return {coords.x+static_cast<float>(offset.x), coords.y+static_cast<float>(offset.y)};
+    }
+
     extern __shared__ half localMemory[];
 
     template <typename TT>
@@ -89,7 +97,7 @@ namespace Kernels
             __device__ void addWeighted(T weight, PixelArray<T> value) 
             {    
                 for(int j=0; j<CHANNEL_COUNT; j++)
-                    //sum[j] += fPixel[j]*weight;
+                    //channels[j] += value[j]*weight;
                     channels[j] = __fmaf_rn(value[j], weight, channels[j]);
             }
             
@@ -170,12 +178,12 @@ namespace Kernels
     }
    
     template <typename T>
-    __device__ PixelArray<T> loadPx(int imageID, int2 coords, cudaTextureObject_t *textures)
+    __device__ PixelArray<T> loadPx(int imageID, float2 coords, cudaTextureObject_t *textures)
     {
         if constexpr (GUESS_HANDLES)
-            return PixelArray<T>{tex2D<uchar4>(textures[imageID], coords.x+0.5f, coords.y+0.5f)};
+            return PixelArray<T>{tex2D<uchar4>(imageID+1, coords.x+0.5f, coords.y+0.5f)};
         else    
-            return PixelArray<T>{tex2D<uchar4>(imageID, coords.x+0.5f, coords.y+0.5f)};
+            return PixelArray<T>{tex2D<uchar4>(textures[imageID], coords.x+0.5f, coords.y+0.5f)};
     }
 
     __device__ void storePx(uchar4 px, int imageID, int2 coords, cudaSurfaceObject_t *surfaces)
@@ -201,7 +209,7 @@ namespace Kernels
         pxID.linearCoordsBase({coords.x, coords.y}, imgRes().x);
         for(int gridID = 0; gridID<gridSize(); gridID++)
         {
-            auto px{loadPx<float>(gridID, coords, textures)};
+            auto px{loadPx<float>(gridID, focusCoords(coords, gridID), textures)};
             for(int viewID=0; viewID<viewCount(); viewID++)
                     sum[viewID].addWeighted(localWeights.ref(weightMatIndex.linearCoords({gridID,viewID}, weightsRes().x)), px);
         }

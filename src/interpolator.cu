@@ -46,6 +46,7 @@ void Interpolator::init()
     viewCount = Kernels::VIEW_COUNT;
     loadGPUData();
     loadGPUConstants();
+    loadGPUOffsets(0);
     sharedSize = sizeof(half)*colsRows.x*colsRows.y*viewCount;
 }
 
@@ -165,8 +166,25 @@ void Interpolator::loadGPUWeights(glm::vec4 startEndPoints)
     cudaMemcpy(weights, weightsMatrix.data(), weightsMatrix.size()*sizeof(half), cudaMemcpyHostToDevice);
 }
 
-void Interpolator::interpolate(std::string outputPath, std::string trajectory, bool tensor)
+void Interpolator::loadGPUOffsets(float focus)
 {
+    std::vector<half2> offsets;
+    glm::vec2 maxOffset{colsRows-glm::ivec2(1)};
+    glm::vec2 center{maxOffset*glm::vec2(0.5)}; 
+//    for(int col=0; col<colsRows.x; col++)
+   //     for(int row=0; row<colsRows.y; row++)
+    for(int i=0; i<colsRows.x*colsRows.y; i++)
+        {
+            glm::vec2 position{i%colsRows.x, i/colsRows.x};
+            glm::vec2 offset{focus*(center-position)/maxOffset};
+            offsets.push_back({offset.x, offset.y});
+        }
+    cudaMemcpyToSymbol(Kernels::offsets, offsets.data(), offsets.size() * sizeof(half2));
+}
+
+void Interpolator::interpolate(std::string outputPath, std::string trajectory, float focus, bool tensor)
+{
+    loadGPUOffsets(focus);
     auto trajectoryPoints = interpretTrajectory(trajectory);
     loadGPUWeights(trajectoryPoints);
     

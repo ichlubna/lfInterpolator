@@ -7,7 +7,7 @@ class Interpolator
     public:
     Interpolator(std::string inputPath);
     ~Interpolator();
-    void interpolate(std::string outputPath, std::string trajectory, bool tensor);
+    void interpolate(std::string outputPath, std::string trajectory, float focus, bool tensor);
 
     private:
     size_t kernelBenchmarkRuns{10};
@@ -23,6 +23,7 @@ class Interpolator
     std::string input;
     void init();
     void loadGPUData();
+    void loadGPUOffsets(float focus);
     void loadGPUConstants();
     void loadGPUWeights(glm::vec4 startEndPoints);
     void storeResults(std::string path);

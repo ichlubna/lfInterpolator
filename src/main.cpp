@@ -7,11 +7,13 @@ int main(int argc, char **argv)
     std::string path = static_cast<std::string>(args["-i"]);
     std::string trajectory = static_cast<std::string>(args["-t"]);
     std::string outputPath = static_cast<std::string>(args["-o"]);
+    float focus = args["-f"];
 
     std::string helpText{ "Usage:\n"
                           "Example: lfInterpolator -i /MyAmazingMachine/thoseImages -t 0.0,0.0,1.0,1.0  -o ./outputs\n"
                           "-i - folder with lf grid images\n"
                           "-t - trajectory of the camera in normalized coordinates of the grid format: startCol,startRow,endCol,endRow\n"
+                          "-f - focusing value in pixels AKA offset of the images in shift & sum\n"
                           "-o - output path\n"
                           "--tensor - tensor cores are used when present\n"
                         };
@@ -27,7 +29,7 @@ int main(int argc, char **argv)
     try
     {
         Interpolator interpolator(path);
-        interpolator.interpolate(outputPath, trajectory, args["--tensor"]);
+        interpolator.interpolate(outputPath, trajectory, focus, args["--tensor"]);
     }
     catch(const std::exception &e)
     {
