@@ -9,6 +9,7 @@ set(SOURCES
 src/lfLoader.cpp
 src/main.cpp
 src/interpolator.cu
+#src/libs/CudaTensorLibrary/tensor.cu
 src/libs/arguments/arguments.hpp
 src/libs/loadingBar/loadingbar.hpp
 src/libs/stb_image.h

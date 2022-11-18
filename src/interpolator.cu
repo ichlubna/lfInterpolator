@@ -71,19 +71,26 @@ int Interpolator::createTextureObject(const uint8_t *data, glm::ivec3 size)
     return texObj;
 }
 
-std::pair<int, int*> Interpolator::createSurfaceObject(glm::ivec3 size)
+std::pair<int, int*> Interpolator::createSurfaceObject(glm::ivec3 size, const uint8_t *data)
+{
+    auto arr = loadImageToArray(data, size);
+    cudaResourceDesc surfRes;
+    memset(&surfRes, 0, sizeof(cudaResourceDesc));
+    surfRes.resType = cudaResourceTypeArray;
+    surfRes.res.array.array = reinterpret_cast<cudaArray*>(arr);
+    cudaSurfaceObject_t surfObj = 0;
+    cudaCreateSurfaceObject(&surfObj, &surfRes);
+    return {surfObj, arr};
+}
+
+int* Interpolator::loadImageToArray(const uint8_t *data, glm::ivec3 size)
 {
     cudaChannelFormatDesc channels = cudaCreateChannelDesc(8, 8, 8, 8, cudaChannelFormatKindUnsigned); 
     cudaArray *arr;
     cudaMallocArray(&arr, &channels, size.x, size.y, cudaArraySurfaceLoadStore);
-
-    cudaResourceDesc surfRes;
-    memset(&surfRes, 0, sizeof(cudaResourceDesc));
-    surfRes.resType = cudaResourceTypeArray;
-    surfRes.res.array.array = arr;
-    cudaSurfaceObject_t surfObj = 0;
-    cudaCreateSurfaceObject(&surfObj, &surfRes);
-    return {surfObj, reinterpret_cast<int*>(arr)};
+    if(data != nullptr)
+        cudaMemcpy2DToArray(arr, 0, 0, data, size.x*size.z, size.x*size.z, size.y, cudaMemcpyHostToDevice);
+    return reinterpret_cast<int*>(arr);
 }
 
 void Interpolator::loadGPUData()
@@ -96,6 +103,7 @@ void Interpolator::loadGPUData()
     std::cout << "Uploading data to GPU..." << std::endl;
     LoadingBar bar(lfLoader.imageCount()+viewCount);
 
+    /*
     std::vector<cudaTextureObject_t> textures;
     for(int col=0; col<colsRows.x; col++)
         for(int row=0; row<colsRows.y; row++)
@@ -103,15 +111,27 @@ void Interpolator::loadGPUData()
             textures.push_back(createTextureObject(lfLoader.image({col, row}).data(), resolution)); 
             bar.add();
         }
+
     cudaMalloc(&textureObjectsArr, textures.size()*sizeof(cudaTextureObject_t));
     cudaMemcpy(textureObjectsArr, textures.data(), textures.size()*sizeof(cudaTextureObject_t), cudaMemcpyHostToDevice);
+    */
+
     
     std::vector<cudaSurfaceObject_t> surfaces;
+    for(int col=0; col<colsRows.x; col++)
+        for(int row=0; row<colsRows.y; row++)
+        {
+            auto surface = createSurfaceObject(resolution, lfLoader.image({col, row}).data());
+            surfaces.push_back(surface.first);  
+            surfaceInputArrays.push_back(surface.second);
+            bar.add();
+        }
+
     for(int i=0; i<viewCount; i++)
     {
         auto surface = createSurfaceObject(resolution);
         surfaces.push_back(surface.first);  
-        outputArrays.push_back(surface.second);
+        surfaceOutputArrays.push_back(surface.second);
         bar.add();
     }
     cudaMalloc(&surfaceObjectsArr, surfaces.size()*sizeof(cudaTextureObject_t));
@@ -211,7 +231,7 @@ void Interpolator::storeResults(std::string path)
     std::vector<uint8_t> data(resolution.x*resolution.y*resolution.z, 255);
     for(int i=0; i<viewCount; i++) 
     {
-        cudaMemcpy2DFromArray(data.data(), resolution.x*resolution.z, reinterpret_cast<cudaArray*>(outputArrays[i]), 0, 0, resolution.x*resolution.z, resolution.y, cudaMemcpyDeviceToHost);
+        cudaMemcpy2DFromArray(data.data(), resolution.x*resolution.z, reinterpret_cast<cudaArray*>(surfaceOutputArrays[i]), 0, 0, resolution.x*resolution.z, resolution.y, cudaMemcpyDeviceToHost);
         stbi_write_png((path+std::to_string(i)+".png").c_str(), resolution.x, resolution.y, resolution.z, data.data(), resolution.x*resolution.z);
         bar.add();
     }

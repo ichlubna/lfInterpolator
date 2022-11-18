@@ -178,20 +178,31 @@ namespace Kernels
     }
    
     template <typename T>
+    __device__ PixelArray<T> loadPx(int imageID, float2 coords, cudaTextureObject_t *surfaces)
+    {
+        if constexpr (GUESS_HANDLES)
+            return PixelArray<T>{surf2Dread<uchar4>(imageID+1, coords.x, coords.y)};
+        else    
+            return PixelArray<T>{surf2Dread<uchar4>(surfaces[imageID], coords.x*4, coords.y)};
+    }
+   
+    /* 
+    template <typename T>
     __device__ PixelArray<T> loadPx(int imageID, float2 coords, cudaTextureObject_t *textures)
     {
         if constexpr (GUESS_HANDLES)
             return PixelArray<T>{tex2D<uchar4>(imageID+1, coords.x+0.5f, coords.y+0.5f)};
         else    
-            return PixelArray<T>{tex2D<uchar4>(textures[imageID], coords.x+0.5f, coords.y+0.5f)};
+            return PixelArray<T>{tex2D<uchar4>(textures[imageID], coords.x, coords.y)};
     }
+    */
 
     __device__ void storePx(uchar4 px, int imageID, int2 coords, cudaSurfaceObject_t *surfaces)
     {
         if constexpr (GUESS_HANDLES)
-            surf2Dwrite<uchar4>(px, imageID*viewCount(), coords.x*sizeof(uchar4), coords.y);
+            surf2Dwrite<uchar4>(px, imageID+1+gridSize(), coords.x*sizeof(uchar4), coords.y);
         else    
-            surf2Dwrite<uchar4>(px, surfaces[imageID], coords.x*sizeof(uchar4), coords.y);
+            surf2Dwrite<uchar4>(px, surfaces[imageID+gridSize()], coords.x*sizeof(uchar4), coords.y);
     }
 
     __global__ void process(cudaTextureObject_t *textures, cudaSurfaceObject_t *surfaces, half *weights)
@@ -209,7 +220,7 @@ namespace Kernels
         pxID.linearCoordsBase({coords.x, coords.y}, imgRes().x);
         for(int gridID = 0; gridID<gridSize(); gridID++)
         {
-            auto px{loadPx<float>(gridID, focusCoords(coords, gridID), textures)};
+            auto px{loadPx<float>(gridID, focusCoords(coords, gridID), surfaces)};
             for(int viewID=0; viewID<viewCount(); viewID++)
                     sum[viewID].addWeighted(localWeights.ref(weightMatIndex.linearCoords({gridID,viewID}, weightsRes().x)), px);
         }
