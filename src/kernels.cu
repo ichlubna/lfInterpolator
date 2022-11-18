@@ -17,11 +17,11 @@ namespace Kernels
     __device__ constexpr int viewCount(){return VIEW_COUNT;}
 
     __device__ constexpr int MAX_IMAGES{256};
-    __constant__ half2 offsets[MAX_IMAGES];
-    __device__ float2 focusCoords(int2 coords, int imageID)
+    __constant__ short2 offsets[MAX_IMAGES];
+    __device__ int2 focusCoords(int2 coords, int imageID)
     {
         auto offset = offsets[imageID];
-        return {coords.x+static_cast<float>(offset.x), coords.y+static_cast<float>(offset.y)};
+        return {coords.x+offset.x, coords.y+offset.y};
     }
 
     extern __shared__ half localMemory[];
@@ -178,12 +178,13 @@ namespace Kernels
     }
    
     template <typename T>
-    __device__ PixelArray<T> loadPx(int imageID, float2 coords, cudaTextureObject_t *surfaces)
+    __device__ PixelArray<T> loadPx(int imageID, int2 coords, cudaTextureObject_t *surfaces)
     {
+        constexpr int MULT_FOUR_SHIFT{2};
         if constexpr (GUESS_HANDLES)
-            return PixelArray<T>{surf2Dread<uchar4>(imageID+1, coords.x, coords.y)};
+            return PixelArray<T>{surf2Dread<uchar4>(imageID+1, coords.x<<MULT_FOUR_SHIFT, coords.y, cudaBoundaryModeClamp)};
         else    
-            return PixelArray<T>{surf2Dread<uchar4>(surfaces[imageID], coords.x*4, coords.y)};
+            return PixelArray<T>{surf2Dread<uchar4>(surfaces[imageID], coords.x<<MULT_FOUR_SHIFT, coords.y, cudaBoundaryModeClamp)};
     }
    
     /* 

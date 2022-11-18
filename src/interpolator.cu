@@ -188,7 +188,7 @@ void Interpolator::loadGPUWeights(glm::vec4 startEndPoints)
 
 void Interpolator::loadGPUOffsets(float focus)
 {
-    std::vector<half2> offsets;
+    std::vector<short2> offsets;
     glm::vec2 maxOffset{colsRows-glm::ivec2(1)};
     glm::vec2 center{maxOffset*glm::vec2(0.5)}; 
 //    for(int col=0; col<colsRows.x; col++)
@@ -196,10 +196,11 @@ void Interpolator::loadGPUOffsets(float focus)
     for(int i=0; i<colsRows.x*colsRows.y; i++)
         {
             glm::vec2 position{i%colsRows.x, i/colsRows.x};
-            glm::vec2 offset{focus*(center-position)/maxOffset};
-            offsets.push_back({offset.x, offset.y});
+            glm::vec2 offset{focus*((center-position)/maxOffset)};
+            glm::ivec2 rounded = glm::round(offset);
+            offsets.push_back({static_cast<short>(rounded.x), static_cast<short>(rounded.y)});
         }
-    cudaMemcpyToSymbol(Kernels::offsets, offsets.data(), offsets.size() * sizeof(half2));
+    cudaMemcpyToSymbol(Kernels::offsets, offsets.data(), offsets.size() * sizeof(short2));
 }
 
 void Interpolator::interpolate(std::string outputPath, std::string trajectory, float focus, bool tensor)
