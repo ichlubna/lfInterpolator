@@ -1,5 +1,6 @@
 #include <glm/glm.hpp>
 #include <cuda_fp16.h>
+//#include "libs/CudaTensorLibrary/tensor.cu"
 
 namespace Kernels
 {
@@ -167,6 +168,8 @@ namespace Kernels
         int2 resolution = imgRes();
         if(coords.x >= resolution.x || coords.y >= resolution.y)
             return false;
+        else
+            return true;
     }
 
     __device__ int2 getImgCoords()
@@ -232,6 +235,23 @@ namespace Kernels
 
     __global__ void processTensor(cudaTextureObject_t *textures, cudaSurfaceObject_t *surfaces, half *weights)
     {
+        int2 coords = getImgCoords();
+        if(coordsOutside(coords))
+            return;
+ 
+        MemoryPartitioner<half> memoryPartitioner(localMemory);
+        auto localWeights = memoryPartitioner.array(weightsSize());
+        loadWeightsSync<half>(weights, localWeights.data, weightsSize()/2); 
+
+        constexpr int MAT_VIEW_COUNT{16};
+        int batchCount{viewCount()/MAT_VIEW_COUNT};
+        for(int batchID=0; batchID<batchCount; batchID++)
+        {
+        
+        }
+
+        //for(int viewID=0; viewID<viewCount(); viewID++)
+        //    storePx(uchar4Pixel, viewID, coords, surfaces);
 
     }
 
