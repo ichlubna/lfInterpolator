@@ -167,9 +167,9 @@ namespace Kernels
     {
         int2 resolution = imgRes();
         if(coords.x >= resolution.x || coords.y >= resolution.y)
-            return false;
-        else
             return true;
+        else
+            return false;
     }
 
     __device__ int2 getImgCoords()
