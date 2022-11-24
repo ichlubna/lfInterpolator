@@ -166,10 +166,7 @@ namespace Kernels
     __device__ bool coordsOutside(int2 coords)
     {
         int2 resolution = imgRes();
-        if(coords.x >= resolution.x || coords.y >= resolution.y)
-            return true;
-        else
-            return false;
+        return (coords.x >= resolution.x || coords.y >= resolution.y);
     }
 
     __device__ int2 getImgCoords()
