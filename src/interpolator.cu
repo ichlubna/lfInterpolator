@@ -233,7 +233,7 @@ void Interpolator::storeResults(std::string path)
     for(int i=0; i<viewCount; i++) 
     {
         cudaMemcpy2DFromArray(data.data(), resolution.x*resolution.z, reinterpret_cast<cudaArray*>(surfaceOutputArrays[i]), 0, 0, resolution.x*resolution.z, resolution.y, cudaMemcpyDeviceToHost);
-        stbi_write_png((path+std::to_string(i)+".png").c_str(), resolution.x, resolution.y, resolution.z, data.data(), resolution.x*resolution.z);
+        stbi_write_png((std::filesystem::path(path)/(std::to_string(i)+".png")).c_str(), resolution.x, resolution.y, resolution.z, data.data(), resolution.x*resolution.z);
         bar.add();
     }
 }
