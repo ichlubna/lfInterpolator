@@ -1,6 +1,6 @@
 #include <glm/glm.hpp>
 #include <cuda_fp16.h>
-//#include "libs/CudaTensorLibrary/tensor.cu"
+#include "libs/CudaTensorLibrary/tensor.cu"
 
 namespace Kernels
 {
