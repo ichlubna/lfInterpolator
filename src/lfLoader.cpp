@@ -61,7 +61,7 @@ void LfLoader::loadData(std::string path)
     for(auto const &file : files)
     {
         auto coords = parseFilename(file);
-        loadImage(path/file, coords); 
+        loadImage(path/file, {coords.y, coords.x}); 
         bar.add(); 
     }
 }

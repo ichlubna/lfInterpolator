@@ -11,7 +11,7 @@ int main(int argc, char **argv)
 
     std::string helpText{ "Usage:\n"
                           "Example: lfInterpolator -i /MyAmazingMachine/thoseImages -t 0.0,0.0,1.0,1.0  -o ./outputs\n"
-                          "-i - folder with lf grid images\n"
+                          "-i - folder with lf grid images - named as column_row.extension, e.g. 01_12.jpg\n"
                           "-t - trajectory of the camera in normalized coordinates of the grid format: startCol,startRow,endCol,endRow\n"
                           "-f - focusing value in pixels AKA offset of the images in shift & sum\n"
                           "-o - output path\n"

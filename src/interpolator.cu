@@ -175,12 +175,13 @@ void Interpolator::loadGPUWeights(glm::vec4 startEndPoints)
     cudaMalloc(reinterpret_cast<void **>(&weights), sizeof(half)*viewCount*colsRows.x*colsRows.y);
     auto trajectory = generateTrajectory(startEndPoints);
     std::vector<half> weightsMatrix;
-    for(auto const &coord : trajectory)
+    for(auto const &view : trajectory)
     {
-        auto floatWeightsLine = generateWeights(coord);
+        auto floatWeightsLine = generateWeights(view);
         std::vector<half> weightsLine;
         for(const auto & w : floatWeightsLine)
             weightsLine.push_back(static_cast<half>(w));
+        
         weightsMatrix.insert(weightsMatrix.end(), weightsLine.begin(), weightsLine.end());
     }
     cudaMemcpy(weights, weightsMatrix.data(), weightsMatrix.size()*sizeof(half), cudaMemcpyHostToDevice);
@@ -188,19 +189,18 @@ void Interpolator::loadGPUWeights(glm::vec4 startEndPoints)
 
 void Interpolator::loadGPUOffsets(float focus)
 {
-    std::vector<short2> offsets;
+    std::vector<int2> offsets;
     glm::vec2 maxOffset{colsRows-glm::ivec2(1)};
     glm::vec2 center{maxOffset*glm::vec2(0.5)}; 
-//    for(int col=0; col<colsRows.x; col++)
-   //     for(int row=0; row<colsRows.y; row++)
-    for(int i=0; i<colsRows.x*colsRows.y; i++)
+    for(int col=0; col<colsRows.x; col++)
+        for(int row=0; row<colsRows.y; row++)
         {
-            glm::vec2 position{i%colsRows.x, i/colsRows.x};
+            glm::vec2 position{col, row};
             glm::vec2 offset{focus*((center-position)/maxOffset)};
             glm::ivec2 rounded = glm::round(offset);
-            offsets.push_back({static_cast<short>(rounded.x), static_cast<short>(rounded.y)});
+            offsets.push_back({rounded.x, rounded.y});
         }
-    cudaMemcpyToSymbol(Kernels::offsets, offsets.data(), offsets.size() * sizeof(short2));
+    cudaMemcpyToSymbol(Kernels::offsets, offsets.data(), offsets.size() * sizeof(int2));
 }
 
 void Interpolator::interpolate(std::string outputPath, std::string trajectory, float focus, bool tensor)
@@ -210,7 +210,7 @@ void Interpolator::interpolate(std::string outputPath, std::string trajectory, f
     loadGPUWeights(trajectoryPoints);
     
     dim3 dimBlock(16, 16, 1);
-    dim3 dimGrid(resolution.x/dimBlock.x, resolution.y/dimBlock.y, 1);
+    dim3 dimGrid(resolution.x/dimBlock.x+1, resolution.y/dimBlock.y+1, 1);
 
     std::cout << "Elapsed time: "<<std::endl;
     for(size_t i=0; i<kernelBenchmarkRuns; i++)

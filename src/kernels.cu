@@ -12,13 +12,13 @@ namespace Kernels
     __constant__ int constants[CONSTANTS_COUNT];
     __device__ int2 imgRes(){return {constants[0], constants[1]};}
     __device__ int2 colsRows(){return{constants[2], constants[3]};}
-    __device__ int2 weightsRes(){return {constants[4], constants[5]};}
+    __device__ int2 weightsRes(){return {constants[5], constants[4]};}
     __device__ int weightsSize(){return constants[6];}
     __device__ int gridSize(){return constants[5];}
     __device__ constexpr int viewCount(){return VIEW_COUNT;}
 
     __device__ constexpr int MAX_IMAGES{256};
-    __constant__ short2 offsets[MAX_IMAGES];
+    __constant__ int2 offsets[MAX_IMAGES];
     __device__ int2 focusCoords(int2 coords, int imageID)
     {
         auto offset = offsets[imageID];
@@ -232,7 +232,7 @@ namespace Kernels
 
     __global__ void processTensor(cudaTextureObject_t *textures, cudaSurfaceObject_t *surfaces, half *weights)
     {
-        int2 coords = getImgCoords();
+       /* int2 coords = getImgCoords();
         if(coordsOutside(coords))
             return;
  
@@ -240,17 +240,23 @@ namespace Kernels
         auto localWeights = memoryPartitioner.array(weightsSize());
         loadWeightsSync<half>(weights, localWeights.data, weightsSize()/2); 
 
+        constexpr int M{32}, N{8}, K{16};
+        CudaTensorLib::fragment<nvcuda::wmma::matrix_a, M, N, K, half> pixelMat;
+        CudaTensorLib::fragment<nvcuda::wmma::matrix_b, M, N, K, half> weightMat;
+        CudaTensorLib::fragment<nvcuda::wmma::accumulator, M, N, K, half> resultMat;
+    
+        CudaTensorLib::Array3DSurfaceWithOffsetsManipulator<char4, CudaTensorLib::DimensionMapping3To2::XY> pixelMatManipulator(surfaces, offsets, 0, 0, gridSize());
+        CudaTensorLib::fill_fragment<CudaTensorLib::fragment<nvcuda::wmma::accumulator, M, N, K, half>,M*K>(&resultMat,;
+
         constexpr int MAT_VIEW_COUNT{16};
         int batchCount{viewCount()/MAT_VIEW_COUNT};
         for(int batchID=0; batchID<batchCount; batchID++)
         {
-        
+            
         }
 
         //for(int viewID=0; viewID<viewCount(); viewID++)
         //    storePx(uchar4Pixel, viewID, coords, surfaces);
-
+    */
     }
-
-
 }
