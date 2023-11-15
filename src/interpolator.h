@@ -7,15 +7,15 @@ class Interpolator
     public:
     Interpolator(std::string inputPath);
     ~Interpolator();
-    void interpolate(std::string outputPath, std::string trajectory, float focus, bool tensor);
+    void interpolate(std::string outputPath, std::string trajectory, float focus, float range, bool tensor);
 
     private:
     size_t kernelBenchmarkRuns{10};
     std::vector<int*> surfaceInputArrays;
     std::vector<int*> surfaceOutputArrays;
-    void *surfaceObjectsArr;
-    void *textureObjectsArr;
     int *weights;
+    int focus{0};
+    int range{0};
     size_t channels{4};
     int viewCount{8};
     size_t sharedSize{0};
@@ -24,7 +24,7 @@ class Interpolator
     std::string input;
     void init();
     void loadGPUData();
-    void loadGPUOffsets(float focus);
+    void loadGPUOffsets();
     void loadGPUConstants();
     void loadGPUWeights(glm::vec4 startEndPoints);
     int* loadImageToArray(const uint8_t *data, glm::ivec3 size);

@@ -45,8 +45,6 @@ void Interpolator::init()
 {
     viewCount = Kernels::VIEW_COUNT;
     loadGPUData();
-    loadGPUConstants();
-    loadGPUOffsets(0);
     sharedSize = sizeof(half)*colsRows.x*colsRows.y*viewCount;
 }
 
@@ -101,21 +99,7 @@ void Interpolator::loadGPUData()
     resolution = lfLoader.imageResolution();
 
     std::cout << "Uploading data to GPU..." << std::endl;
-    LoadingBar bar(lfLoader.imageCount()+viewCount);
-
-    /*
-    std::vector<cudaTextureObject_t> textures;
-    for(int col=0; col<colsRows.x; col++)
-        for(int row=0; row<colsRows.y; row++)
-        { 
-            textures.push_back(createTextureObject(lfLoader.image({col, row}).data(), resolution)); 
-            bar.add();
-        }
-
-    cudaMalloc(&textureObjectsArr, textures.size()*sizeof(cudaTextureObject_t));
-    cudaMemcpy(textureObjectsArr, textures.data(), textures.size()*sizeof(cudaTextureObject_t), cudaMemcpyHostToDevice);
-    */
-
+    LoadingBar bar(lfLoader.imageCount()+viewCount+Kernels::MAP_COUNT);
     
     std::vector<cudaSurfaceObject_t> surfaces;
     for(int col=0; col<colsRows.x; col++)
@@ -127,20 +111,25 @@ void Interpolator::loadGPUData()
             bar.add();
         }
 
-    for(int i=0; i<viewCount; i++)
+    for(int i=0; i<viewCount+Kernels::MAP_COUNT; i++)
     {
         auto surface = createSurfaceObject(resolution);
         surfaces.push_back(surface.first);  
         surfaceOutputArrays.push_back(surface.second);
         bar.add();
     }
-    cudaMalloc(&surfaceObjectsArr, surfaces.size()*sizeof(cudaTextureObject_t));
-    cudaMemcpy(surfaceObjectsArr, surfaces.data(), surfaces.size()*sizeof(cudaSurfaceObject_t), cudaMemcpyHostToDevice);
+    int inputOffset{colsRows.x*colsRows.y};
+    cudaMemcpyToSymbol(Kernels::inputSurfaces, surfaces.data(), sizeof(cudaSurfaceObject_t)*inputOffset);
+    cudaMemcpyToSymbol(Kernels::outputSurfaces, surfaces.data()+inputOffset, sizeof(cudaSurfaceObject_t)*viewCount);
+    cudaMemcpyToSymbol(Kernels::mapSurfaces, surfaces.data()+inputOffset+viewCount, sizeof(cudaSurfaceObject_t)*Kernels::MAP_COUNT);
 }
 
 void Interpolator::loadGPUConstants()
 {
-    std::vector<int> values{resolution.x, resolution.y, colsRows.x, colsRows.y, viewCount, colsRows.x*colsRows.y, colsRows.x*colsRows.y*viewCount};
+    std::vector<int> values{resolution.x, resolution.y,
+                            colsRows.x, colsRows.y, viewCount,
+                            colsRows.x*colsRows.y, colsRows.x*colsRows.y*viewCount,
+                            focus, range};
     cudaMemcpyToSymbol(Kernels::constants, values.data(), values.size() * sizeof(int));
 }
 
@@ -187,39 +176,48 @@ void Interpolator::loadGPUWeights(glm::vec4 startEndPoints)
     cudaMemcpy(weights, weightsMatrix.data(), weightsMatrix.size()*sizeof(half), cudaMemcpyHostToDevice);
 }
 
-void Interpolator::loadGPUOffsets(float focus)
+void Interpolator::loadGPUOffsets()
 {
-    std::vector<int2> offsets;
+    std::vector<int2> focusedOffsets;
+    std::vector<float2> offsets;
     glm::vec2 maxOffset{colsRows-glm::ivec2(1)};
     glm::vec2 center{maxOffset*glm::vec2(0.5)}; 
     for(int col=0; col<colsRows.x; col++)
         for(int row=0; row<colsRows.y; row++)
         {
             glm::vec2 position{col, row};
-            glm::vec2 offset{focus*((center-position)/maxOffset)};
-            glm::ivec2 rounded = glm::round(offset);
-            offsets.push_back({rounded.x, rounded.y});
+            glm::vec2 offset{(center-position)/maxOffset};
+            offsets.push_back({offset.x, offset.y});
+            glm::ivec2 rounded = glm::round(offset*static_cast<float>(focus));
+            focusedOffsets.push_back({rounded.x, rounded.y});
         }
-    cudaMemcpyToSymbol(Kernels::offsets, offsets.data(), offsets.size() * sizeof(int2));
+    cudaMemcpyToSymbol(Kernels::focusedOffsets, focusedOffsets.data(), focusedOffsets.size() * sizeof(int2));
+    cudaMemcpyToSymbol(Kernels::offsets, offsets.data(), offsets.size() * sizeof(float2));
 }
 
-void Interpolator::interpolate(std::string outputPath, std::string trajectory, float focus, bool tensor)
+void Interpolator::interpolate(std::string outputPath, std::string trajectory, float inFocus, float inRange, bool tensor)
 {
-    loadGPUOffsets(focus);
+    focus = inFocus;
+    range = inRange;
+    loadGPUOffsets();
     auto trajectoryPoints = interpretTrajectory(trajectory);
     loadGPUWeights(trajectoryPoints);
+    loadGPUConstants();
     
     dim3 dimBlock(16, 16, 1);
     dim3 dimGrid(resolution.x/dimBlock.x+1, resolution.y/dimBlock.y+1, 1);
 
-    std::cout << "Elapsed time: "<<std::endl;
+    if(inRange > 0)
+        Kernels::estimateFocusMap<<<dimGrid, dimBlock, sharedSize>>>();
+    
+    std::cout << "Elapsed time: "<< std::endl;
     for(size_t i=0; i<kernelBenchmarkRuns; i++)
     {
         Timer timer;
         if(tensor)
-            Kernels::processTensor<<<dimGrid, dimBlock, sharedSize>>>(reinterpret_cast<cudaTextureObject_t*>(textureObjectsArr), reinterpret_cast<cudaSurfaceObject_t*>(surfaceObjectsArr), reinterpret_cast<half*>(weights));
+            Kernels::processTensor<<<dimGrid, dimBlock, sharedSize>>>(reinterpret_cast<half*>(weights));
         else
-            Kernels::process<<<dimGrid, dimBlock, sharedSize>>>(reinterpret_cast<cudaTextureObject_t*>(textureObjectsArr), reinterpret_cast<cudaSurfaceObject_t*>(surfaceObjectsArr), reinterpret_cast<half*>(weights));
+            Kernels::process<<<dimGrid, dimBlock, sharedSize>>>(reinterpret_cast<half*>(weights));
         std::cout << std::to_string(i) << ": " << timer.stop() << " ms" << std::endl;
     }
     storeResults(outputPath);
@@ -228,12 +226,18 @@ void Interpolator::interpolate(std::string outputPath, std::string trajectory, f
 void Interpolator::storeResults(std::string path)
 {
     std::cout << "Storing results..." << std::endl;
-    LoadingBar bar(viewCount);
+    int count = viewCount;
+    if(range > 0)
+        count += 1;
+    LoadingBar bar(count);
     std::vector<uint8_t> data(resolution.x*resolution.y*resolution.z, 255);
-    for(int i=0; i<viewCount; i++) 
+    for(int i=0; i<count; i++) 
     {
         cudaMemcpy2DFromArray(data.data(), resolution.x*resolution.z, reinterpret_cast<cudaArray*>(surfaceOutputArrays[i]), 0, 0, resolution.x*resolution.z, resolution.y, cudaMemcpyDeviceToHost);
-        stbi_write_png((std::filesystem::path(path)/(std::to_string(i)+".png")).c_str(), resolution.x, resolution.y, resolution.z, data.data(), resolution.x*resolution.z);
+        auto fileName = std::filesystem::path(path)/(std::to_string(i)+".png");
+        if(i >= viewCount)
+            fileName = std::filesystem::path(path)/("map"+std::to_string(i-viewCount)+".png");
+        stbi_write_png(fileName.c_str(), resolution.x, resolution.y, resolution.z, data.data(), resolution.x*resolution.z);
         bar.add();
     }
 }
