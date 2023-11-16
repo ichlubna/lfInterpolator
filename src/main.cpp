@@ -9,21 +9,25 @@ int main(int argc, char **argv)
     std::string outputPath = static_cast<std::string>(args["-o"]);
     float focus = args["-f"];
     float range = args["-r"];
+    std::string method = static_cast<std::string>(args["-m"]);
 
     std::string helpText{ "Usage:\n"
                           "Example: lfInterpolator -i /MyAmazingMachine/thoseImages -t 0.0,0.0,1.0,1.0  -o ./outputs\n"
                           "-o - output path\n"
                           "-i - folder with lf grid images - named as column_row.extension, e.g. 01_12.jpg\n"
                           "-t - trajectory of the camera in normalized coordinates of the grid format: startCol,startRow,endCol,endRow\n"
+                          "-m - interpolation method:\n"
+                          "     STD - standard interpolation kernel\n"
+                          "     TEN_WM - WMMA tensor cores\n"
+                          "     TEN_OP - optimized memory tensor cores\n"
                           "The following arguments are pixel offsets of the images in shift & sum\n"
                           "-f - focusing value\n"
                           "-r - focusing range (will be added to the focusing value) - will produce all-focused result if used\n"
-                          "--tensor - tensor cores are used when present\n"
                         };
     if(args.printHelpIfPresent(helpText))
         return 0;
 
-    if(!args["-i"] || !args["-t"] || !args["-o"])
+    if(!args["-i"] || !args["-t"] || !args["-o"] || !args["-m"])
     {
         std::cerr << "Missing required parameters. Use -h for help." << std::endl;
         return EXIT_FAILURE;
@@ -32,7 +36,7 @@ int main(int argc, char **argv)
     try
     {
         Interpolator interpolator(path);
-        interpolator.interpolate(outputPath, trajectory, focus, range, args["--tensor"]);
+        interpolator.interpolate(outputPath, trajectory, focus, range, method);
     }
     catch(const std::exception &e)
     {

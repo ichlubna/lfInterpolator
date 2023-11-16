@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <stdexcept>
 #define GLM_FORCE_SWIZZLE
 #include <sstream>
 #include <cuda_runtime.h>
@@ -126,10 +128,16 @@ void Interpolator::loadGPUData()
 
 void Interpolator::loadGPUConstants()
 {
+    constexpr int PIXEL_SIZE_FACTOR{100};
+    int2 blockRadius {resolution.x/PIXEL_SIZE_FACTOR, resolution.y/PIXEL_SIZE_FACTOR};
+    if((blockRadius.x % 2) != 0)
+        blockRadius.x++;
+    if((blockRadius.y % 2) != 0)
+        blockRadius.y++;
     std::vector<int> values{resolution.x, resolution.y,
                             colsRows.x, colsRows.y, viewCount,
                             colsRows.x*colsRows.y, colsRows.x*colsRows.y*viewCount,
-                            focus, range};
+                            focus, range, blockRadius.x, blockRadius.y};
     cudaMemcpyToSymbol(Kernels::constants, values.data(), values.size() * sizeof(int));
 }
 
@@ -157,6 +165,26 @@ std::vector<glm::vec2> Interpolator::generateTrajectory(glm::vec4 startEndPoints
     for(int i=0; i<viewCount; i++)
         trajectory.push_back(startEndPoints.xy()+step*static_cast<float>(i));
     return trajectory;
+}
+
+bool compareDistances(std::pair<float, int> a, std::pair<float, int> b)
+{
+    return (a.first < b.first);
+}
+
+void Interpolator::selectFocusMapViews(glm::vec4 startEndPoints)
+{
+    std::vector<std::pair<float, int>> distances;
+    glm::vec2 center = startEndPoints.xy()+(startEndPoints.zw() - startEndPoints.xy())*0.5f;
+    for(int col=0; col<colsRows.x; col++)
+        for(int row=0; row<colsRows.y; row++)
+            distances.push_back({glm::distance({col, row}, center), distances.size()});
+        
+    std::sort(distances.begin(), distances.end(), compareDistances);
+    std::vector<int> ids;
+    for(int i=0; i<Kernels::FOCUS_MAP_IDS_COUNT; i++)
+        ids.push_back(distances[i].second);
+    cudaMemcpyToSymbol(Kernels::focusMapIDs, ids.data(), ids.size() * sizeof(int));
 }
 
 void Interpolator::loadGPUWeights(glm::vec4 startEndPoints)
@@ -195,13 +223,14 @@ void Interpolator::loadGPUOffsets()
     cudaMemcpyToSymbol(Kernels::offsets, offsets.data(), offsets.size() * sizeof(float2));
 }
 
-void Interpolator::interpolate(std::string outputPath, std::string trajectory, float inFocus, float inRange, bool tensor)
+void Interpolator::interpolate(std::string outputPath, std::string trajectory, float inFocus, float inRange, std::string method)
 {
     focus = inFocus;
     range = inRange;
     loadGPUOffsets();
     auto trajectoryPoints = interpretTrajectory(trajectory);
     loadGPUWeights(trajectoryPoints);
+    selectFocusMapViews(trajectoryPoints);
     loadGPUConstants();
     
     dim3 dimBlock(16, 16, 1);
@@ -211,15 +240,30 @@ void Interpolator::interpolate(std::string outputPath, std::string trajectory, f
         Kernels::estimateFocusMap<<<dimGrid, dimBlock, sharedSize>>>();
     
     std::cout << "Elapsed time: "<< std::endl;
+    float avgTime{0};
     for(size_t i=0; i<kernelBenchmarkRuns; i++)
     {
         Timer timer;
-        if(tensor)
+        if(method == "TEN_WM")
+        {
             Kernels::processTensor<<<dimGrid, dimBlock, sharedSize>>>(reinterpret_cast<half*>(weights));
+        }
+        else if(method == "TEN_OP")
+        {
+            Kernels::processTensor<<<dimGrid, dimBlock, sharedSize>>>(reinterpret_cast<half*>(weights));
+        }
+        else if(method == "STD")
+        {
+            if(range > 0)
+                Kernels::process<true><<<dimGrid, dimBlock, sharedSize>>>(reinterpret_cast<half*>(weights));
+            else
+                Kernels::process<false><<<dimGrid, dimBlock, sharedSize>>>(reinterpret_cast<half*>(weights));
+        }
         else
-            Kernels::process<<<dimGrid, dimBlock, sharedSize>>>(reinterpret_cast<half*>(weights));
-        std::cout << std::to_string(i) << ": " << timer.stop() << " ms" << std::endl;
+            throw std::runtime_error("The specified interpolation method does not exist!");
+        avgTime += timer.stop();
     }
+    std::cout << "Average time of " << std::to_string(kernelBenchmarkRuns) << " runs: " << avgTime/kernelBenchmarkRuns  << " ms" << std::endl;
     storeResults(outputPath);
 }
 
@@ -257,7 +301,7 @@ glm::vec4 Interpolator::interpretTrajectory(std::string trajectory)
     for (const auto &number : numbers)
     {
         float value = std::stof(number);
-        absolute[i] = value*colsRows[i%2];
+        absolute[i] = value*(colsRows[i%2]-1);
         i++;
     }
     return absolute;

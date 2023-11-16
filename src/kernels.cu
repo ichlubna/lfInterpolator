@@ -1,5 +1,6 @@
 #include <glm/glm.hpp>
 #include <cuda_fp16.h>
+#include <mma.h>
 #include "libs/CudaTensorLibrary/tensor.cu"
 
 namespace Kernels
@@ -7,7 +8,7 @@ namespace Kernels
     __device__ constexpr bool GUESS_HANDLES{false};
 
     __device__ constexpr int CHANNEL_COUNT{4};
-    __device__ constexpr int CONSTANTS_COUNT{9};
+    __device__ constexpr int CONSTANTS_COUNT{11};
     __device__ constexpr int VIEW_COUNT{8};
     __constant__ int constants[CONSTANTS_COUNT];
     __device__ int2 imgRes(){return {constants[0], constants[1]};}
@@ -17,6 +18,7 @@ namespace Kernels
     __device__ int gridSize(){return constants[5];}
     __device__ int focus(){return constants[7];}
     __device__ int focusRange(){return constants[8];}
+    __device__ int2 blockRadius(){return {constants[9], constants[10]};}
     __device__ constexpr int viewCount(){return VIEW_COUNT;}
 
     __device__ constexpr int MAX_IMAGES{256};
@@ -27,6 +29,8 @@ namespace Kernels
     __constant__ cudaSurfaceObject_t inputSurfaces[MAX_SURFACES];
     __constant__ cudaSurfaceObject_t outputSurfaces[VIEW_COUNT];
     __constant__ cudaSurfaceObject_t mapSurfaces[MAP_COUNT];
+    __device__ constexpr int FOCUS_MAP_IDS_COUNT{32};
+    __constant__ int focusMapIDs[FOCUS_MAP_IDS_COUNT];
  
    __device__ int2 focusCoords(int2 coords, int imageID)
     {
@@ -320,17 +324,18 @@ __device__ PixelArray operator/(const float &value)
 
     __device__ float focusDispersion(float focus, int2 coords)
     {
-        constexpr int BLOCK_RADIUS{0};
-        constexpr int BLOCK_DIAMETER{(1+2*BLOCK_RADIUS)};
+        int2 radius = blockRadius();
+        constexpr int BLOCK_DIAMETER{3};
         constexpr int BLOCK_SIZE{BLOCK_DIAMETER*BLOCK_DIAMETER};
         ElementRange<float> dispersions[BLOCK_SIZE];
 
-        for(int gridID = 0; gridID<gridSize(); gridID++)
+        for(int viewID= 0; viewID<FOCUS_MAP_IDS_COUNT; viewID++)
         {
+            int gridID{focusMapIDs[viewID]};
             int i{0};
             int2 focusedCoords = focusCoords(coords, gridID, focus);
-            for(int x = focusedCoords.x-BLOCK_RADIUS; x <= focusedCoords.x+BLOCK_RADIUS; x++) 
-                for(int y = focusedCoords.y-BLOCK_RADIUS; y <= focusedCoords.y+BLOCK_RADIUS; y++)
+            for(int x = focusedCoords.x-radius.x; x <= focusedCoords.x+radius.x; x+=radius.x) 
+                for(int y = focusedCoords.y-radius.y; y <= focusedCoords.y+radius.y; y+=radius.y)
                    dispersions[i++].add(loadPx<float>(gridID, {x,y}));
         }
 
@@ -378,6 +383,7 @@ __device__ PixelArray operator/(const float &value)
         //loadPxFromMap(0, coords); 
     }
 
+    template<bool allFocus>
     __global__ void process(half *weights)
     {
         int2 coords = getImgCoords();
@@ -391,14 +397,18 @@ __device__ PixelArray operator/(const float &value)
         Indexer pxID;
         pxID.linearCoordsBase({coords.x, coords.y}, imgRes().x);
         int2 focusedCoords;
+
         int focusValue;
-        if(focusRange() > 0)
+        if constexpr (allFocus)
             focusValue = round((static_cast<float>(loadPxFromMap(0, coords))/UCHAR_MAX)*focusRange());
-        else
-            focusValue = focus();
+
         for(int gridID = 0; gridID<gridSize(); gridID++)
         { 
-            focusedCoords = focusCoords(coords, gridID, focusValue);
+            if constexpr (allFocus)
+                focusedCoords = focusCoords(coords, gridID, focusValue);
+            else
+                focusedCoords = focusCoords(coords, gridID);
+
             auto px{loadPx<float>(gridID, focusedCoords)};
             for(int viewID=0; viewID<viewCount(); viewID++)
                     sum[viewID].addWeighted(localWeights.ref(Indexer::linearCoordsSimple({gridID,viewID}, weightsRes().x)), px);
@@ -410,31 +420,51 @@ __device__ PixelArray operator/(const float &value)
 
     __global__ void processTensor(half *weights)
     {
-       /* int2 coords = getImgCoords();
+        using namespace nvcuda;
+
+        int2 coords = getImgCoords();
         if(coordsOutside(coords))
             return;
- 
+
+        constexpr int WARP_WIDTH{32};
+        int warpID = threadIdx.x/WARP_WIDTH;
+        int warpThreadID = threadIdx.x%WARP_WIDTH;
+        constexpr int PIXELS{32}, VIEWS{8}, IMAGES{16};
+
         MemoryPartitioner<half> memoryPartitioner(localMemory);
         auto localWeights = memoryPartitioner.array(weightsSize());
         loadWeightsSync<half>(weights, localWeights.data, weightsSize()/2); 
+        auto localInPixels = memoryPartitioner.array(PIXELS*IMAGES);
+        auto localOutPixels = memoryPartitioner.array(PIXELS*VIEWS);
+        
 
-        constexpr int M{32}, N{8}, K{16};
-        CudaTensorLib::fragment<nvcuda::wmma::matrix_a, M, N, K, half> pixelMat;
-        CudaTensorLib::fragment<nvcuda::wmma::matrix_b, M, N, K, half> weightMat;
-        CudaTensorLib::fragment<nvcuda::wmma::accumulator, M, N, K, half> resultMat;
-    
-        CudaTensorLib::Array3DSurfaceWithOffsetsManipulator<char4, CudaTensorLib::DimensionMapping3To2::XY> pixelMatManipulator(surfaces, offsets, 0, 0, gridSize());
-        CudaensorLib::fill_fragment<CudaTensorLib::fragment<nvcuda::wmma::accumulator, M, N, K, half>,M*K>(&resultMat,;
-
-        constexpr int MAT_VIEW_COUNT{16};
-        int batchCount{viewCount()/MAT_VIEW_COUNT};
-        for(int batchID=0; batchID<batchCount; batchID++)
+        //ROWSxCOLS
+        //PIXELSxIMAGES
+        wmma::fragment<wmma::accumulator, PIXELS, VIEWS, IMAGES, half> matResult;
+        //IMAGES(WEIGHTS)xVIEWS
+        wmma::fragment<wmma::matrix_a, PIXELS, VIEWS, IMAGES, half, wmma::row_major> matPixels;
+        //PIXELSxVIEWS
+        wmma::fragment<wmma::matrix_b, PIXELS, VIEWS, IMAGES, half, wmma::col_major> matWeights;
+   
+        int linearCoords = Indexer::linearCoordsSimple(coords, imgRes().x);
+        const int batchCount{gridSize()/IMAGES};
+        for(int batch=0; batch<batchCount; batch++)
         {
-            
-        }
+            const int offset{batch*IMAGES};
+            for(int image=offset; image<offset+IMAGES; image++) 
+                localInPixels.data[linearCoords] = loadPx<half>(image, coords).channels[0];
 
-        //for(int viewID=0; viewID<viewCount(); viewID++)
-        //    storePx(uchar4Pixel, viewID, coords, surfaces);
-    */
+            wmma::load_matrix_sync(matPixels, localInPixels.ptr(0), IMAGES);
+            wmma::load_matrix_sync(matWeights, localWeights.ptr(batch*IMAGES), gridSize());
+            wmma::mma_sync(matResult, matPixels, matWeights, matResult);
+        }
+        wmma::store_matrix_sync(localOutPixels.ptr(0), matResult, VIEWS, wmma::mem_row_major);
+        for(int viewID = 0; viewID<viewCount(); viewID++)
+        {
+            uchar4 color{0,0,0,0};
+            color.x = localOutPixels.data[linearCoords];
+            storePx(color, viewID, coords);
+        }
+ 
     }
 }
