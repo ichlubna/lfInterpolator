@@ -10,7 +10,7 @@ class Interpolator
     void interpolate(std::string outputPath, std::string trajectory, float focus, float range, std::string method);
 
     private:
-    size_t kernelBenchmarkRuns{10};
+    size_t kernelBenchmarkRuns{100};
     std::vector<int*> surfaceInputArrays;
     std::vector<int*> surfaceOutputArrays;
     int *weights;
@@ -34,5 +34,5 @@ class Interpolator
     std::vector<glm::vec2> generateTrajectory(glm::vec4 startEndPoints);
     glm::vec4 interpretTrajectory(std::string trajectory);    
     std::pair<int, int*> createSurfaceObject(glm::ivec3 size, const uint8_t *data=nullptr);
-    int createTextureObject(const uint8_t *data, glm::ivec3 size);
+    int createTextureObject(glm::ivec3 size, const uint8_t *data);
 };

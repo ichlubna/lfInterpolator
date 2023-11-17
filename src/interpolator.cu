@@ -50,7 +50,7 @@ void Interpolator::init()
     sharedSize = sizeof(half)*colsRows.x*colsRows.y*viewCount;
 }
 
-int Interpolator::createTextureObject(const uint8_t *data, glm::ivec3 size)
+int Interpolator::createTextureObject(glm::ivec3 size, const uint8_t *data)
 {
     cudaChannelFormatDesc channels = cudaCreateChannelDesc(8, 8, 8, 8, cudaChannelFormatKindUnsigned);
     cudaArray *arr;
@@ -112,6 +112,17 @@ void Interpolator::loadGPUData()
             surfaceInputArrays.push_back(surface.second);
             bar.add();
         }
+
+   /* 
+    std::vector<cudaTextureObject_t> textures;
+    for(int col=0; col<colsRows.x; col++)
+        for(int row=0; row<colsRows.y; row++)
+        {
+            auto surface = createTextureObject(resolution, lfLoader.image({col, row}).data());
+            textures.push_back(surface);  
+        }
+    cudaMemcpyToSymbol(Kernels::inputTextures, textures.data(), sizeof(cudaTextureObject_t)*textures.size());
+   */ 
 
     for(int i=0; i<viewCount+Kernels::MAP_COUNT; i++)
     {
@@ -246,7 +257,7 @@ void Interpolator::interpolate(std::string outputPath, std::string trajectory, f
         Timer timer;
         if(method == "TEN_WM")
         {
-            size_t tensorSharedSize = sharedSize+(32*16+32*8)*sizeof(half)*(dimBlock.x*dimBlock.y/32)*3;
+            size_t tensorSharedSize = sharedSize + (32*16)*sizeof(half)*(dimBlock.x*dimBlock.y/32);
             if(range > 0)
                 Kernels::processTensor<true><<<dimGrid, dimBlock, tensorSharedSize>>>(reinterpret_cast<half*>(weights));
             else

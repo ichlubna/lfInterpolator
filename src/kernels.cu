@@ -160,6 +160,15 @@ __device__ PixelArray operator/(const float &value)
             return PixelArray<T>{surf2Dread<uchar4>(inputSurfaces[imageID], coords.x<<MULT_FOUR_SHIFT, coords.y, cudaBoundaryModeClamp)};
     }
     
+    __device__ uchar4 loadPx(int imageID, int2 coords)
+    {
+        constexpr int MULT_FOUR_SHIFT{2};
+        if constexpr (GUESS_HANDLES)
+            return surf2Dread<uchar4>(imageID+1, coords.x<<MULT_FOUR_SHIFT, coords.y, cudaBoundaryModeClamp);
+        else   
+            return surf2Dread<uchar4>(inputSurfaces[imageID], coords.x<<MULT_FOUR_SHIFT, coords.y, cudaBoundaryModeClamp);
+    }
+    
     __device__ unsigned char loadPxFromMap(int mapID, int2 coords)
     {
         constexpr int MULT_FOUR_SHIFT{2};
@@ -167,15 +176,25 @@ __device__ PixelArray operator/(const float &value)
     }
    
     /* 
+    __constant__ cudaTextureObject_t inputTextures[MAX_SURFACES];
     template <typename T>
-    __device__ PixelArray<T> loadPx(int imageID, float2 coords, cudaTextureObject_t *textures)
+    __device__ PixelArray<T> loadPx(int imageID, int2 inCoords)
     {
+        float2 coords{static_cast<float>(inCoords.x), static_cast<float>(inCoords.y)};
         if constexpr (GUESS_HANDLES)
             return PixelArray<T>{tex2D<uchar4>(imageID+1, coords.x+0.5f, coords.y+0.5f)};
         else    
-            return PixelArray<T>{tex2D<uchar4>(textures[imageID], coords.x, coords.y)};
+            return PixelArray<T>{tex2D<uchar4>(inputTextures[imageID], coords.x, coords.y)};
     }
-    */
+    __device__ uchar4 loadPx(int imageID, int2 inCoords)
+    {
+        float2 coords{static_cast<float>(inCoords.x), static_cast<float>(inCoords.y)};
+        if constexpr (GUESS_HANDLES)
+            return tex2D<uchar4>(imageID+1, coords.x+0.5f, coords.y+0.5f);
+        else   
+            return tex2D<uchar4>(inputTextures[imageID], coords.x, coords.y);
+    }
+   */ 
 
     __device__ void storePx(uchar4 px, int imageID, int2 coords)
     {
@@ -368,17 +387,16 @@ __device__ PixelArray operator/(const float &value)
         //const int warpCount = blockDim.x*blockDim.y/WARP_WIDTH;
         constexpr int WARP_COUNT = 256/WARP_WIDTH;
         constexpr int PIXELS{32}, VIEWS{8}, IMAGES{16};
-
-        MemoryPartitioner<half> memoryPartitioner(localMemory);
-        auto localWeights = memoryPartitioner.array(weightsSize());
-        loadWeightsSync<half>(weights, localWeights, weightsSize()/2); 
-        
         constexpr int CHANNELS{3};
         constexpr int PIXEL_MATRIX_SIZE{PIXELS*IMAGES};
-        constexpr int RESULT_MATRIX_SIZE{PIXELS*VIEWS};
-        auto localInPixels = memoryPartitioner.array(PIXEL_MATRIX_SIZE*WARP_COUNT*CHANNELS);
-        auto localOutPixels = memoryPartitioner.array(RESULT_MATRIX_SIZE*WARP_COUNT*CHANNELS); 
-
+        
+        MemoryPartitioner<half> memoryPartitioner(localMemory);
+        auto localPixelsMemory = memoryPartitioner.array(PIXEL_MATRIX_SIZE*WARP_COUNT);
+        const int pixelRowIDInt4{(IMAGES>>3)*warpThreadID};
+        half *currentLocalPixelsMemory = localPixelsMemory+(warpID*PIXEL_MATRIX_SIZE);;
+        //auto localWeights = memoryPartitioner.array(weightsSize());
+        //loadWeightsSync<half>(weights, localWeights, weightsSize()/2); 
+        
         //ROWSxCOLS
         //PIXELSxIMAGES
         wmma::fragment<wmma::matrix_a, PIXELS, VIEWS, IMAGES, half, wmma::row_major> matPixels;
@@ -389,22 +407,14 @@ __device__ PixelArray operator/(const float &value)
         for(int channel=0; channel<CHANNELS; channel++) 
             wmma::fill_fragment(matResult[channel], 0.0f);
 
-        const int pixelRowID{IMAGES*warpThreadID};
-        half *currentLocalInPixels[CHANNELS];
-        currentLocalInPixels[0] = localInPixels+(warpID*PIXEL_MATRIX_SIZE);
-        currentLocalInPixels[1] = localInPixels+(PIXEL_MATRIX_SIZE*(warpID+WARP_COUNT));
-        currentLocalInPixels[2] = localInPixels+(PIXEL_MATRIX_SIZE*(warpID+WARP_COUNT*2));
-        half *currentLocalOutPixels[CHANNELS];
-        currentLocalOutPixels[0] = localOutPixels+(warpID*RESULT_MATRIX_SIZE);
-        currentLocalOutPixels[1] = localOutPixels+(RESULT_MATRIX_SIZE*(warpID+WARP_COUNT));
-        currentLocalOutPixels[2] = localOutPixels+(RESULT_MATRIX_SIZE*(warpID+WARP_COUNT*2));
-       
+    
+        uchar4 pixels[IMAGES]; 
         int2 focusedCoords;
         int focusValue; 
         if constexpr (allFocus)
             focusValue = round((static_cast<float>(loadPxFromMap(0, coords))/UCHAR_MAX)*focusRange());
 
-        const int batchCount{gridSize()/IMAGES};
+        const int batchCount{gridSize()>>4}; // division by IMAGES
         for(int batch=0; batch<batchCount; batch++)
         {
             const int offset{batch*IMAGES};
@@ -416,30 +426,40 @@ __device__ PixelArray operator/(const float &value)
                 else
                     focusedCoords = focusCoords(coords, gridID);
 
-                auto pixel = loadPx<half>(gridID, focusedCoords);
-                currentLocalInPixels[0][pixelRowID+image] = pixel.channels[0];
-                currentLocalInPixels[1][pixelRowID+image] = pixel.channels[1];
-                currentLocalInPixels[2][pixelRowID+image] = pixel.channels[2];
+                uchar4 px = loadPx(gridID, focusedCoords);
+                for(int channel=0; channel<CHANNELS; channel++)
+                    reinterpret_cast<unsigned char*>(pixels)[IMAGES*channel + image] = reinterpret_cast<unsigned char*>(&px)[channel];
             }
-            wmma::load_matrix_sync(matWeights, localWeights+batch*IMAGES, gridSize());
+            wmma::load_matrix_sync(matWeights, weights+batch*IMAGES, gridSize());
             for(int channel=0; channel<CHANNELS; channel++) 
             {
-                wmma::load_matrix_sync(matPixels, currentLocalInPixels[channel], IMAGES);
+                auto pixelsSeparate = reinterpret_cast<unsigned char*>(pixels); 
+                const int linear = channel*IMAGES;
+                int4 packed[2];
+                for(int j=0; j<8; j++)
+                {
+                    int jj = j<<1;
+                    reinterpret_cast<half2*>(&packed)[j] = half2{pixelsSeparate[linear+jj], pixelsSeparate[linear+jj+1]};
+                }
+                int bankA = warpThreadID%2;
+                int bankB = (warpThreadID+1)%2;
+                reinterpret_cast<int4*>(currentLocalPixelsMemory)[pixelRowIDInt4+bankA] = packed[bankA];
+                reinterpret_cast<int4*>(currentLocalPixelsMemory)[pixelRowIDInt4+bankB] = packed[bankB];
+
+                wmma::load_matrix_sync(matPixels, currentLocalPixelsMemory, IMAGES);
                 wmma::mma_sync(matResult[channel], matPixels, matWeights, matResult[channel]);
             }
         }
         for(int channel=0; channel<CHANNELS; channel++) 
-            wmma::store_matrix_sync(currentLocalOutPixels[channel], matResult[channel], VIEWS, wmma::mem_row_major);
-        const int viewRowID{VIEWS*warpThreadID};
+        {
+            wmma::store_matrix_sync(currentLocalPixelsMemory, matResult[channel], VIEWS, wmma::mem_row_major);
+            reinterpret_cast<int4*>(pixels)[channel] = reinterpret_cast<int4*>(currentLocalPixelsMemory)[warpThreadID];
+        }
         for(int viewID = 0; viewID<viewCount(); viewID++)
         {
             uchar4 color{0,0,0,255};
-            /*color.x = clamp(currentLocalOutPixels[0][viewID+viewRowID], 0, 255);
-            color.y = clamp(currentLocalOutPixels[1][viewID+viewRowID], 0, 255);
-            color.z = clamp(currentLocalOutPixels[2][viewID+viewRowID], 0, 255);*/
-            color.x = currentLocalOutPixels[0][viewID+viewRowID];
-            color.y = currentLocalOutPixels[1][viewID+viewRowID];
-            color.z = currentLocalOutPixels[2][viewID+viewRowID];
+            for(int i=0; i<CHANNELS; i++)
+                reinterpret_cast<unsigned char*>(&color)[i] = reinterpret_cast<half*>(pixels)[VIEWS*i+viewID];
             storePx(color, viewID, coords);
         }
  
