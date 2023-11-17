@@ -246,7 +246,8 @@ void Interpolator::interpolate(std::string outputPath, std::string trajectory, f
         Timer timer;
         if(method == "TEN_WM")
         {
-            Kernels::processTensor<<<dimGrid, dimBlock, sharedSize>>>(reinterpret_cast<half*>(weights));
+            size_t tensorSharedSize = sharedSize+(32*16+32*8)*sizeof(half)*(dimBlock.x*dimBlock.y/32)*3;
+            Kernels::processTensor<<<dimGrid, dimBlock, tensorSharedSize>>>(reinterpret_cast<half*>(weights));
         }
         else if(method == "TEN_OP")
         {

@@ -46,36 +46,6 @@ namespace Kernels
 
     extern __shared__ half localMemory[];
 
-    template <typename TT>
-    class LocalArray
-    {
-        public:
-        __device__ LocalArray(TT* inData) : data{inData}{}; 
-        __device__ TT* ptr(int index)
-        {
-            return data+index;
-        }
-        
-        template <typename T>
-        __device__ T* ptr(int index) 
-        {
-            return reinterpret_cast<T*>(ptr(index));
-        }  
-
-        __device__ TT& ref(int index)
-        {
-            return *ptr(index);
-        }
-        
-        template <typename T>
-        __device__ T& ref(int index)
-        {
-            return *ptr<T>(index);
-        }
-     
-        TT *data;
-    };
-
     template <typename T>
     class MemoryPartitioner
     {
@@ -85,9 +55,9 @@ namespace Kernels
             memory = inMemory; 
         }
 
-        __device__ LocalArray<T> array(int size)
+        __device__ T* array(int size)
         {
-            T *arr = &(memory[consumed]);
+            T *arr = memory+consumed;
             consumed += size;
             return {arr};
         }
@@ -147,60 +117,21 @@ __device__ PixelArray operator/(const float &value)
                 return *this;
             }
         };
-
-    class Indexer
-    {
-        public:
-        __device__ int linearIDBase(int id, int size)
-        {
-            return linearCoord = id*size;
-        } 
-        
-        __device__ int linearID(int id, int size)
-        {
-            return linearCoord + id*size;
-        }
  
-        __device__ int linearCoordsBase(int2 coords, int width)
-        {
-            return linearCoord = coords.y*width + coords.x;
-        }
-
-        __device__ int linearCoords(int2 coords, int width)
-        {
-            return linearCoord + coords.y*width + coords.x;
-        }
-        
-        static __device__ int linearCoordsSimple(int2 coords, int width)
-        {
-            return coords.y*width + coords.x;
-        }
-       
-        __device__ int linearCoordsY(int coordY, int width)
-        {
-            return linearCoord + coordY*width;
-        }
-
-        __device__ int getBase()
-        {
-            return linearCoord;
-        }
-
-        private:
-        int linearCoord{0};
-    };
+    __device__ int linearCoords(int2 coords, int width)
+    {
+        return coords.y*width + coords.x;
+    }
 
     template <typename T>
     __device__ static void loadWeightsSync(T *inData, T *data, int size)
     {
-        Indexer id;
-        id.linearCoordsBase(int2{static_cast<int>(threadIdx.x), static_cast<int>(threadIdx.y)}, blockDim.x);
-        int i = id.getBase();
-        if(i < size)
+        int id = linearCoords(int2{static_cast<int>(threadIdx.x), static_cast<int>(threadIdx.y)}, blockDim.x);
+        if(id < size)
         {
             int *intLocal = reinterpret_cast<int*>(data);
             int *intIn = reinterpret_cast<int*>(inData);
-            intLocal[i] = intIn[i]; 
+            intLocal[id] = intIn[id]; 
         }
         __syncthreads();
     }
@@ -392,10 +323,8 @@ __device__ PixelArray operator/(const float &value)
 
         MemoryPartitioner<half> memoryPartitioner(localMemory);
         auto localWeights = memoryPartitioner.array(weightsSize());
-        loadWeightsSync<half>(weights, localWeights.data, weightsSize()/2);  
+        loadWeightsSync<half>(weights, localWeights, weightsSize()/2);  
         PixelArray<float> sum[viewCount()];
-        Indexer pxID;
-        pxID.linearCoordsBase({coords.x, coords.y}, imgRes().x);
         int2 focusedCoords;
 
         int focusValue;
@@ -411,11 +340,16 @@ __device__ PixelArray operator/(const float &value)
 
             auto px{loadPx<float>(gridID, focusedCoords)};
             for(int viewID=0; viewID<viewCount(); viewID++)
-                    sum[viewID].addWeighted(localWeights.ref(Indexer::linearCoordsSimple({gridID,viewID}, weightsRes().x)), px);
+                    sum[viewID].addWeighted(localWeights[linearCoords({gridID,viewID}, weightsRes().x)], px);
         }
 
         for(int viewID=0; viewID<viewCount(); viewID++)
             storePx(sum[viewID].uch4(), viewID, coords);
+    }
+
+    __device__ half clamp(half value, float minimum, float maximum)
+    {
+        return max(min(value, maximum), minimum);
     }
 
     __global__ void processTensor(half *weights)
@@ -426,43 +360,74 @@ __device__ PixelArray operator/(const float &value)
         if(coordsOutside(coords))
             return;
 
+        const int linearCoords = threadIdx.x+threadIdx.y*blockDim.x;
         constexpr int WARP_WIDTH{32};
-        int warpID = threadIdx.x/WARP_WIDTH;
-        int warpThreadID = threadIdx.x%WARP_WIDTH;
+        const int warpID = linearCoords/WARP_WIDTH;
+        const int warpThreadID = linearCoords%WARP_WIDTH;
+        //const int warpCount = blockDim.x*blockDim.y/WARP_WIDTH;
+        constexpr int WARP_COUNT = 256/WARP_WIDTH;
         constexpr int PIXELS{32}, VIEWS{8}, IMAGES{16};
 
         MemoryPartitioner<half> memoryPartitioner(localMemory);
         auto localWeights = memoryPartitioner.array(weightsSize());
-        loadWeightsSync<half>(weights, localWeights.data, weightsSize()/2); 
-        auto localInPixels = memoryPartitioner.array(PIXELS*IMAGES);
-        auto localOutPixels = memoryPartitioner.array(PIXELS*VIEWS);
+        loadWeightsSync<half>(weights, localWeights, weightsSize()/2); 
         
+        constexpr int CHANNELS{3};
+        constexpr int PIXEL_MATRIX_SIZE{PIXELS*IMAGES};
+        constexpr int RESULT_MATRIX_SIZE{PIXELS*VIEWS};
+        auto localInPixels = memoryPartitioner.array(PIXEL_MATRIX_SIZE*WARP_COUNT*CHANNELS);
+        auto localOutPixels = memoryPartitioner.array(RESULT_MATRIX_SIZE*WARP_COUNT*CHANNELS); 
 
         //ROWSxCOLS
         //PIXELSxIMAGES
-        wmma::fragment<wmma::accumulator, PIXELS, VIEWS, IMAGES, half> matResult;
-        //IMAGES(WEIGHTS)xVIEWS
         wmma::fragment<wmma::matrix_a, PIXELS, VIEWS, IMAGES, half, wmma::row_major> matPixels;
-        //PIXELSxVIEWS
+        //IMAGES(weights)xVIEWS
         wmma::fragment<wmma::matrix_b, PIXELS, VIEWS, IMAGES, half, wmma::col_major> matWeights;
-   
-        int linearCoords = Indexer::linearCoordsSimple(coords, imgRes().x);
+        //PIXELSxVIEWS
+        wmma::fragment<wmma::accumulator, PIXELS, VIEWS, IMAGES, half> matResult[CHANNELS];
+        for(int channel=0; channel<CHANNELS; channel++) 
+            wmma::fill_fragment(matResult[channel], 0.0f);
+
+        const int pixelRowID{IMAGES*warpThreadID};
+        half *currentLocalInPixels[CHANNELS];
+        currentLocalInPixels[0] = localInPixels+(warpID*PIXEL_MATRIX_SIZE);
+        currentLocalInPixels[1] = localInPixels+(PIXEL_MATRIX_SIZE*(warpID+WARP_COUNT));
+        currentLocalInPixels[2] = localInPixels+(PIXEL_MATRIX_SIZE*(warpID+WARP_COUNT*2));
+        half *currentLocalOutPixels[CHANNELS];
+        currentLocalOutPixels[0] = localOutPixels+(warpID*RESULT_MATRIX_SIZE);
+        currentLocalOutPixels[1] = localOutPixels+(RESULT_MATRIX_SIZE*(warpID+WARP_COUNT));
+        currentLocalOutPixels[2] = localOutPixels+(RESULT_MATRIX_SIZE*(warpID+WARP_COUNT*2));
+        
         const int batchCount{gridSize()/IMAGES};
         for(int batch=0; batch<batchCount; batch++)
         {
             const int offset{batch*IMAGES};
-            for(int image=offset; image<offset+IMAGES; image++) 
-                localInPixels.data[linearCoords] = loadPx<half>(image, coords).channels[0];
-
-            wmma::load_matrix_sync(matPixels, localInPixels.ptr(0), IMAGES);
-            wmma::load_matrix_sync(matWeights, localWeights.ptr(batch*IMAGES), gridSize());
-            wmma::mma_sync(matResult, matPixels, matWeights, matResult);
+            for(int image=0; image<IMAGES; image++) 
+            {
+                auto pixel = loadPx<half>(offset+image, coords);
+                currentLocalInPixels[0][pixelRowID+image] = pixel.channels[0];
+                currentLocalInPixels[1][pixelRowID+image] = pixel.channels[1];
+                currentLocalInPixels[2][pixelRowID+image] = pixel.channels[2];
+            }
+            wmma::load_matrix_sync(matWeights, localWeights+batch*IMAGES, gridSize());
+            for(int channel=0; channel<CHANNELS; channel++) 
+            {
+                wmma::load_matrix_sync(matPixels, currentLocalInPixels[channel], IMAGES);
+                wmma::mma_sync(matResult[channel], matPixels, matWeights, matResult[channel]);
+            }
         }
-        wmma::store_matrix_sync(localOutPixels.ptr(0), matResult, VIEWS, wmma::mem_row_major);
+        for(int channel=0; channel<CHANNELS; channel++) 
+            wmma::store_matrix_sync(currentLocalOutPixels[channel], matResult[channel], VIEWS, wmma::mem_row_major);
+        const int viewRowID{VIEWS*warpThreadID};
         for(int viewID = 0; viewID<viewCount(); viewID++)
         {
-            uchar4 color{0,0,0,0};
-            color.x = localOutPixels.data[linearCoords];
+            uchar4 color{0,0,0,255};
+            /*color.x = clamp(currentLocalOutPixels[0][viewID+viewRowID], 0, 255);
+            color.y = clamp(currentLocalOutPixels[1][viewID+viewRowID], 0, 255);
+            color.z = clamp(currentLocalOutPixels[2][viewID+viewRowID], 0, 255);*/
+            color.x = currentLocalOutPixels[0][viewID+viewRowID];
+            color.y = currentLocalOutPixels[1][viewID+viewRowID];
+            color.z = currentLocalOutPixels[2][viewID+viewRowID];
             storePx(color, viewID, coords);
         }
  
