@@ -247,11 +247,14 @@ void Interpolator::interpolate(std::string outputPath, std::string trajectory, f
         if(method == "TEN_WM")
         {
             size_t tensorSharedSize = sharedSize+(32*16+32*8)*sizeof(half)*(dimBlock.x*dimBlock.y/32)*3;
-            Kernels::processTensor<<<dimGrid, dimBlock, tensorSharedSize>>>(reinterpret_cast<half*>(weights));
+            if(range > 0)
+                Kernels::processTensor<true><<<dimGrid, dimBlock, tensorSharedSize>>>(reinterpret_cast<half*>(weights));
+            else
+                Kernels::processTensor<false><<<dimGrid, dimBlock, tensorSharedSize>>>(reinterpret_cast<half*>(weights));
         }
         else if(method == "TEN_OP")
         {
-            Kernels::processTensor<<<dimGrid, dimBlock, sharedSize>>>(reinterpret_cast<half*>(weights));
+            //Kernels::processTensor<<<dimGrid, dimBlock, sharedSize>>>(reinterpret_cast<half*>(weights));
         }
         else if(method == "STD")
         {

@@ -325,8 +325,8 @@ __device__ PixelArray operator/(const float &value)
         auto localWeights = memoryPartitioner.array(weightsSize());
         loadWeightsSync<half>(weights, localWeights, weightsSize()/2);  
         PixelArray<float> sum[viewCount()];
+        
         int2 focusedCoords;
-
         int focusValue;
         if constexpr (allFocus)
             focusValue = round((static_cast<float>(loadPxFromMap(0, coords))/UCHAR_MAX)*focusRange());
@@ -352,6 +352,7 @@ __device__ PixelArray operator/(const float &value)
         return max(min(value, maximum), minimum);
     }
 
+    template<bool allFocus>
     __global__ void processTensor(half *weights)
     {
         using namespace nvcuda;
@@ -397,14 +398,25 @@ __device__ PixelArray operator/(const float &value)
         currentLocalOutPixels[0] = localOutPixels+(warpID*RESULT_MATRIX_SIZE);
         currentLocalOutPixels[1] = localOutPixels+(RESULT_MATRIX_SIZE*(warpID+WARP_COUNT));
         currentLocalOutPixels[2] = localOutPixels+(RESULT_MATRIX_SIZE*(warpID+WARP_COUNT*2));
-        
+       
+        int2 focusedCoords;
+        int focusValue; 
+        if constexpr (allFocus)
+            focusValue = round((static_cast<float>(loadPxFromMap(0, coords))/UCHAR_MAX)*focusRange());
+
         const int batchCount{gridSize()/IMAGES};
         for(int batch=0; batch<batchCount; batch++)
         {
             const int offset{batch*IMAGES};
             for(int image=0; image<IMAGES; image++) 
             {
-                auto pixel = loadPx<half>(offset+image, coords);
+                const int gridID{offset+image};
+                if constexpr (allFocus)
+                    focusedCoords = focusCoords(coords, gridID, focusValue);
+                else
+                    focusedCoords = focusCoords(coords, gridID);
+
+                auto pixel = loadPx<half>(gridID, focusedCoords);
                 currentLocalInPixels[0][pixelRowID+image] = pixel.channels[0];
                 currentLocalInPixels[1][pixelRowID+image] = pixel.channels[1];
                 currentLocalInPixels[2][pixelRowID+image] = pixel.channels[2];
