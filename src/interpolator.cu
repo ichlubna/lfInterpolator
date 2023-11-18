@@ -45,9 +45,8 @@ Interpolator::~Interpolator()
 
 void Interpolator::init()
 {
-    viewCount = Kernels::VIEW_COUNT;
     loadGPUData();
-    sharedSize = sizeof(half)*colsRows.x*colsRows.y*viewCount;
+    sharedSize = sizeof(half)*colsRows.x*colsRows.y*Kernels::VIEW_TOTAL_COUNT;
 }
 
 int Interpolator::createTextureObject(glm::ivec3 size, const uint8_t *data)
@@ -101,7 +100,7 @@ void Interpolator::loadGPUData()
     resolution = lfLoader.imageResolution();
 
     std::cout << "Uploading data to GPU..." << std::endl;
-    LoadingBar bar(lfLoader.imageCount()+viewCount+Kernels::MAP_COUNT);
+    LoadingBar bar(lfLoader.imageCount()+Kernels::VIEW_TOTAL_COUNT+Kernels::MAP_COUNT);
     
     std::vector<cudaSurfaceObject_t> surfaces;
     for(int col=0; col<colsRows.x; col++)
@@ -124,7 +123,7 @@ void Interpolator::loadGPUData()
     cudaMemcpyToSymbol(Kernels::inputTextures, textures.data(), sizeof(cudaTextureObject_t)*textures.size());
    */ 
 
-    for(int i=0; i<viewCount+Kernels::MAP_COUNT; i++)
+    for(int i=0; i<Kernels::VIEW_TOTAL_COUNT+Kernels::MAP_COUNT; i++)
     {
         auto surface = createSurfaceObject(resolution);
         surfaces.push_back(surface.first);  
@@ -133,8 +132,8 @@ void Interpolator::loadGPUData()
     }
     int inputOffset{colsRows.x*colsRows.y};
     cudaMemcpyToSymbol(Kernels::inputSurfaces, surfaces.data(), sizeof(cudaSurfaceObject_t)*inputOffset);
-    cudaMemcpyToSymbol(Kernels::outputSurfaces, surfaces.data()+inputOffset, sizeof(cudaSurfaceObject_t)*viewCount);
-    cudaMemcpyToSymbol(Kernels::mapSurfaces, surfaces.data()+inputOffset+viewCount, sizeof(cudaSurfaceObject_t)*Kernels::MAP_COUNT);
+    cudaMemcpyToSymbol(Kernels::outputSurfaces, surfaces.data()+inputOffset, sizeof(cudaSurfaceObject_t)*Kernels::VIEW_TOTAL_COUNT);
+    cudaMemcpyToSymbol(Kernels::mapSurfaces, surfaces.data()+inputOffset+Kernels::VIEW_TOTAL_COUNT, sizeof(cudaSurfaceObject_t)*Kernels::MAP_COUNT);
 }
 
 void Interpolator::loadGPUConstants()
@@ -146,13 +145,13 @@ void Interpolator::loadGPUConstants()
     if((blockRadius.y % 2) != 0)
         blockRadius.y++;
     std::vector<int> values{resolution.x, resolution.y,
-                            colsRows.x, colsRows.y, viewCount,
-                            colsRows.x*colsRows.y, colsRows.x*colsRows.y*viewCount,
+                            colsRows.x, colsRows.y, 0,
+                            colsRows.x*colsRows.y, colsRows.x*colsRows.y*Kernels::VIEW_TOTAL_COUNT,
                             focus, range, blockRadius.x, blockRadius.y};
     cudaMemcpyToSymbol(Kernels::constants, values.data(), values.size() * sizeof(int));
 }
 
-std::vector<float> Interpolator::generateWeights(glm::vec2 coords)
+std::vector<float> Interpolator::generateWeights(glm::vec2 coords, float effect)
 {
     auto maxDistance = glm::distance(glm::vec2(0,0), glm::vec2(colsRows));
     float weightSum{0};
@@ -161,6 +160,7 @@ std::vector<float> Interpolator::generateWeights(glm::vec2 coords)
         for(int row=0; row<colsRows.y; row++)
         {
             float weight = maxDistance - glm::distance(coords, glm::vec2(col, row));
+            weight = powf(weight, effect);
             weightSum += weight;
             weightVals.push_back(weight);
         }
@@ -171,10 +171,11 @@ std::vector<float> Interpolator::generateWeights(glm::vec2 coords)
 
 std::vector<glm::vec2> Interpolator::generateTrajectory(glm::vec4 startEndPoints)
 {
-    glm::vec2 step = (startEndPoints.zw() - startEndPoints.xy())/static_cast<float>(viewCount);
+    glm::vec2 step = (startEndPoints.zw() - startEndPoints.xy())/static_cast<float>(Kernels::VIEW_TOTAL_COUNT-1);
     std::vector<glm::vec2> trajectory;
-    for(int i=0; i<viewCount; i++)
+    for(int i=0; i<Kernels::VIEW_TOTAL_COUNT; i++)
         trajectory.push_back(startEndPoints.xy()+step*static_cast<float>(i));
+
     return trajectory;
 }
 
@@ -198,14 +199,14 @@ void Interpolator::selectFocusMapViews(glm::vec4 startEndPoints)
     cudaMemcpyToSymbol(Kernels::focusMapIDs, ids.data(), ids.size() * sizeof(int));
 }
 
-void Interpolator::loadGPUWeights(glm::vec4 startEndPoints)
+void Interpolator::loadGPUWeights(glm::vec4 startEndPoints, float effect)
 {
-    cudaMalloc(reinterpret_cast<void **>(&weights), sizeof(half)*viewCount*colsRows.x*colsRows.y);
+    cudaMalloc(reinterpret_cast<void **>(&weights), sizeof(half)*Kernels::VIEW_TOTAL_COUNT*colsRows.x*colsRows.y);
     auto trajectory = generateTrajectory(startEndPoints);
     std::vector<half> weightsMatrix;
     for(auto const &view : trajectory)
     {
-        auto floatWeightsLine = generateWeights(view);
+        auto floatWeightsLine = generateWeights(view, effect);
         std::vector<half> weightsLine;
         for(const auto & w : floatWeightsLine)
             weightsLine.push_back(static_cast<half>(w));
@@ -234,13 +235,13 @@ void Interpolator::loadGPUOffsets()
     cudaMemcpyToSymbol(Kernels::offsets, offsets.data(), offsets.size() * sizeof(float2));
 }
 
-void Interpolator::interpolate(std::string outputPath, std::string trajectory, float inFocus, float inRange, std::string method)
+void Interpolator::interpolate(std::string outputPath, std::string trajectory, float inFocus, float inRange, std::string method, float effect)
 {
     focus = inFocus;
     range = inRange;
     loadGPUOffsets();
     auto trajectoryPoints = interpretTrajectory(trajectory);
-    loadGPUWeights(trajectoryPoints);
+    loadGPUWeights(trajectoryPoints, effect);
     selectFocusMapViews(trajectoryPoints);
     loadGPUConstants();
     
@@ -276,6 +277,8 @@ void Interpolator::interpolate(std::string outputPath, std::string trajectory, f
         }
         else
             throw std::runtime_error("The specified interpolation method does not exist!");
+        //cudaDeviceSynchronize();
+        //std::cerr <<  cudaPeekAtLastError();
         avgTime += timer.stop();
     }
     std::cout << "Average time of " << std::to_string(kernelBenchmarkRuns) << " runs: " << avgTime/kernelBenchmarkRuns  << " ms" << std::endl;
@@ -285,7 +288,7 @@ void Interpolator::interpolate(std::string outputPath, std::string trajectory, f
 void Interpolator::storeResults(std::string path)
 {
     std::cout << "Storing results..." << std::endl;
-    int count = viewCount;
+    int count = Kernels::VIEW_TOTAL_COUNT;
     if(range > 0)
         count += 1;
     LoadingBar bar(count);
@@ -293,9 +296,9 @@ void Interpolator::storeResults(std::string path)
     for(int i=0; i<count; i++) 
     {
         cudaMemcpy2DFromArray(data.data(), resolution.x*resolution.z, reinterpret_cast<cudaArray*>(surfaceOutputArrays[i]), 0, 0, resolution.x*resolution.z, resolution.y, cudaMemcpyDeviceToHost);
-        auto fileName = std::filesystem::path(path)/(std::to_string(i)+".png");
-        if(i >= viewCount)
-            fileName = std::filesystem::path(path)/("map"+std::to_string(i-viewCount)+".png");
+        auto fileName = std::filesystem::path(path)/(std::string(((i<10) ? "0" : ""))+std::to_string(i)+".png");
+        if(i >= Kernels::VIEW_TOTAL_COUNT)
+            fileName = std::filesystem::path(path)/("map"+std::to_string(i-Kernels::VIEW_TOTAL_COUNT)+".png");
         stbi_write_png(fileName.c_str(), resolution.x, resolution.y, resolution.z, data.data(), resolution.x*resolution.z);
         bar.add();
     }

@@ -16,16 +16,22 @@ int main(int argc, char **argv)
                           "-o - output path\n"
                           "-i - folder with lf grid images - named as column_row.extension, e.g. 01_12.jpg\n"
                           "-t - trajectory of the camera in normalized coordinates of the grid format: startCol,startRow,endCol,endRow\n"
+                          "-s - the amount of the spatial 3D effect - affects how much are views close to the virtual one prioritized (default=3.0)\n"
                           "-m - interpolation method:\n"
                           "     STD - standard interpolation kernel\n"
                           "     TEN_WM - WMMA tensor cores\n"
                           "     TEN_OP - optimized memory tensor cores\n"
                           "The following arguments are pixel offsets of the images in shift & sum\n"
-                          "-f - focusing value\n"
+                          "-f - focusing value (default=0)\n"
                           "-r - focusing range (will be added to the focusing value) - will produce all-focused result if used\n"
                         };
     if(args.printHelpIfPresent(helpText))
         return 0;
+
+    float effect = static_cast<float>(args["-s"]);
+    if(effect <= 0)
+        effect = 3;
+        
 
     if(!args["-i"] || !args["-t"] || !args["-o"] || !args["-m"])
     {
@@ -36,7 +42,7 @@ int main(int argc, char **argv)
     try
     {
         Interpolator interpolator(path);
-        interpolator.interpolate(outputPath, trajectory, focus, range, method);
+        interpolator.interpolate(outputPath, trajectory, focus, range, method, effect);
     }
     catch(const std::exception &e)
     {
