@@ -375,8 +375,63 @@ __device__ PixelArray operator/(const float &value)
         return max(min(value, maximum), minimum);
     }
 
+
+    namespace Tensors
+    {  
+ 
+    constexpr int CHANNELS{3};
+    constexpr int WARP_WIDTH{32};
+    constexpr int WARP_COUNT = 256/WARP_WIDTH;
+    constexpr int PIXELS{32}, VIEWS{8}, IMAGES{16};
+    constexpr int PIXEL_MATRIX_SIZE{PIXELS*IMAGES};
+
+    template<bool allFocus> 
+    __device__ void loadPixels(int batch, int2 coords, unsigned char *destinationPixels, int focusValue)
+    {
+        int2 focusedCoords;
+        const int batchOffset{batch*IMAGES};
+        for(int image=0; image<IMAGES; image++) 
+        {
+            const int gridID{batchOffset+image};
+            if constexpr (allFocus)
+                focusedCoords = focusCoords(coords, gridID, focusValue);
+            else
+                focusedCoords = focusCoords(coords, gridID);
+
+            uchar4 px = loadPx(gridID, focusedCoords);
+            for(int channel=0; channel<CHANNELS; channel++)
+                destinationPixels[IMAGES*channel + image] = reinterpret_cast<unsigned char*>(&px)[channel];
+        }
+    }
+
+    __device__ void pixelsToSharedMemory(int channel, unsigned char *sourcePixels, int warpThreadID, half *currentLocalPixelsMemory, int pixelRowIDInt4)
+    {
+        const int linear = channel*IMAGES;
+        int4 packed[2];
+        for(int j=0; j<8; j++)
+        {
+            int jj = j<<1;
+            reinterpret_cast<half2*>(&packed)[j] = half2{sourcePixels[linear+jj], sourcePixels[linear+jj+1]};
+        }
+        int bankA = warpThreadID%2;
+        int bankB = (warpThreadID+1)%2;
+        reinterpret_cast<int4*>(currentLocalPixelsMemory)[pixelRowIDInt4+bankA] = packed[bankA];
+        reinterpret_cast<int4*>(currentLocalPixelsMemory)[pixelRowIDInt4+bankB] = packed[bankB];
+    }
+
+    __device__ void storePortionViews(int portion, int2 coords, half *pixels)
+    {
+        for(int viewID = 0; viewID<VIEW_COUNT; viewID++)
+        {
+            uchar4 color{0,0,0,255};
+            for(int channel=0; channel<CHANNELS; channel++)
+                reinterpret_cast<unsigned char*>(&color)[channel] = reinterpret_cast<half*>(pixels)[VIEWS*channel+viewID];
+            storePx(color, viewID+portion*VIEW_COUNT, coords);
+        }
+    }
+
     template<bool allFocus>
-    __global__ void processTensor(half *weights)
+    __global__ void process(half *weights)
     {
         using namespace nvcuda;
 
@@ -385,14 +440,9 @@ __device__ PixelArray operator/(const float &value)
             return;
 
         const int linearCoords = threadIdx.x+threadIdx.y*blockDim.x;
-        constexpr int WARP_WIDTH{32};
         const int warpID = linearCoords/WARP_WIDTH;
         const int warpThreadID = linearCoords%WARP_WIDTH;
         //const int warpCount = blockDim.x*blockDim.y/WARP_WIDTH;
-        constexpr int WARP_COUNT = 256/WARP_WIDTH;
-        constexpr int PIXELS{32}, VIEWS{8}, IMAGES{16};
-        constexpr int CHANNELS{3};
-        constexpr int PIXEL_MATRIX_SIZE{PIXELS*IMAGES};
         
         MemoryPartitioner<half> memoryPartitioner(localMemory);
         auto localPixelsMemory = memoryPartitioner.array(PIXEL_MATRIX_SIZE*WARP_COUNT);
@@ -413,7 +463,6 @@ __device__ PixelArray operator/(const float &value)
                 wmma::fill_fragment(matResult[channel+portion*CHANNELS], 0.0f);
     
         uchar4 pixels[IMAGES]; 
-        int2 focusedCoords;
         int focusValue; 
         if constexpr (allFocus)
             focusValue = round((static_cast<float>(loadPxFromMap(0, coords))/UCHAR_MAX)*focusRange());
@@ -421,38 +470,13 @@ __device__ PixelArray operator/(const float &value)
         const int batchCount{gridSize()>>4}; // division by IMAGES
         for(int batch=0; batch<batchCount; batch++)
         {
-            const int offset{batch*IMAGES};
-            for(int image=0; image<IMAGES; image++) 
-            {
-                const int gridID{offset+image};
-                if constexpr (allFocus)
-                    focusedCoords = focusCoords(coords, gridID, focusValue);
-                else
-                    focusedCoords = focusCoords(coords, gridID);
-
-                uchar4 px = loadPx(gridID, focusedCoords);
-                for(int channel=0; channel<CHANNELS; channel++)
-                    reinterpret_cast<unsigned char*>(pixels)[IMAGES*channel + image] = reinterpret_cast<unsigned char*>(&px)[channel];
-            }
-            
+            loadPixels<allFocus>(batch, coords, reinterpret_cast<unsigned char*>(&pixels), focusValue);
             for(int portion=0; portion<VIEW_PORTIONS; portion++)
                 wmma::load_matrix_sync(matWeights[portion], localWeights+batch*IMAGES+portion*gridSize()*VIEWS, gridSize());
 
             for(int channel=0; channel<CHANNELS; channel++) 
             {
-                auto pixelsSeparate = reinterpret_cast<unsigned char*>(pixels); 
-                const int linear = channel*IMAGES;
-                int4 packed[2];
-                for(int j=0; j<8; j++)
-                {
-                    int jj = j<<1;
-                    reinterpret_cast<half2*>(&packed)[j] = half2{pixelsSeparate[linear+jj], pixelsSeparate[linear+jj+1]};
-                }
-                int bankA = warpThreadID%2;
-                int bankB = (warpThreadID+1)%2;
-                reinterpret_cast<int4*>(currentLocalPixelsMemory)[pixelRowIDInt4+bankA] = packed[bankA];
-                reinterpret_cast<int4*>(currentLocalPixelsMemory)[pixelRowIDInt4+bankB] = packed[bankB];
-
+                pixelsToSharedMemory(channel, reinterpret_cast<unsigned char*>(pixels), warpThreadID, currentLocalPixelsMemory, pixelRowIDInt4);
                 wmma::load_matrix_sync(matPixels, currentLocalPixelsMemory, IMAGES);
                 for(int portion=0; portion<VIEW_PORTIONS; portion++)
                 {
@@ -461,6 +485,7 @@ __device__ PixelArray operator/(const float &value)
                 }
             }
         }
+
         for(int portion=0; portion<VIEW_PORTIONS; portion++)
         {
             for(int channel=0; channel<CHANNELS; channel++) 
@@ -468,14 +493,9 @@ __device__ PixelArray operator/(const float &value)
                 wmma::store_matrix_sync(currentLocalPixelsMemory, matResult[channel+portion*CHANNELS], VIEWS, wmma::mem_row_major);
                 reinterpret_cast<int4*>(pixels)[channel] = reinterpret_cast<int4*>(currentLocalPixelsMemory)[warpThreadID];
             }
-            for(int viewID = 0; viewID<VIEW_COUNT; viewID++)
-            {
-                uchar4 color{0,0,0,255};
-                for(int channel=0; channel<CHANNELS; channel++)
-                    reinterpret_cast<unsigned char*>(&color)[channel] = reinterpret_cast<half*>(pixels)[VIEWS*channel+viewID];
-                storePx(color, viewID+portion*VIEW_COUNT, coords);
-            }
+            storePortionViews(portion, coords, reinterpret_cast<half*>(&pixels));
         }
  
+    }
     }
 }
