@@ -7,7 +7,7 @@ namespace Kernels
 {
     __device__ constexpr bool GUESS_HANDLES{false};
 
-    __device__ constexpr int CHANNEL_COUNT{4};
+    __device__ constexpr int CHANNELS{3};
     __device__ constexpr int CONSTANTS_COUNT{11};
     __device__ constexpr int VIEW_COUNT{8};
     __device__ constexpr int VIEW_PORTIONS{2};
@@ -32,6 +32,7 @@ namespace Kernels
     __constant__ cudaSurfaceObject_t mapSurfaces[MAP_COUNT];
     __device__ constexpr int FOCUS_MAP_IDS_COUNT{32};
     __constant__ int focusMapIDs[FOCUS_MAP_IDS_COUNT];
+    extern __shared__ half localMemory[];
  
    __device__ int2 focusCoords(int2 coords, int imageID)
     {
@@ -44,80 +45,6 @@ namespace Kernels
         auto offset = offsets[imageID];
         return {static_cast<int>(coords.x+focus*offset.x), static_cast<int>(coords.y+focus*offset.y)};
     }
-
-    extern __shared__ half localMemory[];
-
-    template <typename T>
-    class MemoryPartitioner
-    {
-        public:
-        __device__ MemoryPartitioner(T *inMemory)
-        {
-            memory = inMemory; 
-        }
-
-        __device__ T* array(int size)
-        {
-            T *arr = memory+consumed;
-            consumed += size;
-            return {arr};
-        }
-        private:
-        T *memory;
-        unsigned int consumed{0};
-    };
-
-     template <typename T>
-        class PixelArray
-        {
-            public:
-            __device__ PixelArray(){};
-            __device__ PixelArray(uchar4 pixel) : channels{T(pixel.x), T(pixel.y), T(pixel.z), T(pixel.w)}{};
-            __device__ PixelArray(float4 pixel) : channels{pixel.x, pixel.y, pixel.z}{};
-            T channels[CHANNEL_COUNT]{0,0,0,0};
-            __device__ T& operator[](int index){return channels[index];}
-          
-             __device__ uchar4 uch4() 
-            {
-                uchar4 result;
-                auto data = reinterpret_cast<unsigned char*>(&result);
-                for(int i=0; i<CHANNEL_COUNT; i++)
-                    data[i] = __half2int_rn(channels[i]);
-                return result;
-            }
-           
-            __device__ void addWeighted(T weight, PixelArray<T> value) 
-            {    
-                for(int j=0; j<CHANNEL_COUNT; j++)
-                    //channels[j] += value[j]*weight;
-                    channels[j] = __fmaf_rn(value[j], weight, channels[j]);
-            }
-            
-            __device__ PixelArray<T> operator/= (const T &divisor)
-            {
-                for(int j=0; j<CHANNEL_COUNT; j++)
-                    this->channels[j] /= divisor;
-                return *this;
-            }
-            __device__ PixelArray operator-(const PixelArray &value)
-            {
-                for(int j=0; j<CHANNEL_COUNT; j++)
-                    this->channels[j] -= value.channels[j];
-                return *this;
-            }
-__device__ PixelArray operator/(const float &value)
-            {
-                for(int j=0; j<CHANNEL_COUNT; j++)
-                    this->channels[j] /= value;
-                return *this;
-            }
-  __device__ PixelArray operator+= (const PixelArray &value)
-            {
-                for(int j=0; j<CHANNEL_COUNT; j++)
-                    this->channels[j] += value.channels[j];
-                return *this;
-            }
-        };
  
     __device__ int linearCoords(int2 coords, int width)
     {
@@ -154,16 +81,6 @@ __device__ PixelArray operator/(const float &value)
         return coords;
     }
    
-    template <typename T>
-    __device__ PixelArray<T> loadPx(int imageID, int2 coords)
-    {
-        constexpr int MULT_FOUR_SHIFT{2};
-        if constexpr (GUESS_HANDLES)
-            return PixelArray<T>{surf2Dread<uchar4>(imageID+1, coords.x<<MULT_FOUR_SHIFT, coords.y, cudaBoundaryModeClamp)};
-        else    
-            return PixelArray<T>{surf2Dread<uchar4>(inputSurfaces[imageID], coords.x<<MULT_FOUR_SHIFT, coords.y, cudaBoundaryModeClamp)};
-    }
-    
     __device__ uchar4 loadPx(int imageID, int2 coords)
     {
         constexpr int MULT_FOUR_SHIFT{2};
@@ -181,15 +98,6 @@ __device__ PixelArray operator/(const float &value)
    
     /* 
     __constant__ cudaTextureObject_t inputTextures[MAX_SURFACES];
-    template <typename T>
-    __device__ PixelArray<T> loadPx(int imageID, int2 inCoords)
-    {
-        float2 coords{static_cast<float>(inCoords.x), static_cast<float>(inCoords.y)};
-        if constexpr (GUESS_HANDLES)
-            return PixelArray<T>{tex2D<uchar4>(imageID+1, coords.x+0.5f, coords.y+0.5f)};
-        else    
-            return PixelArray<T>{tex2D<uchar4>(inputTextures[imageID], coords.x, coords.y)};
-    }
     __device__ uchar4 loadPx(int imageID, int2 inCoords)
     {
         float2 coords{static_cast<float>(inCoords.x), static_cast<float>(inCoords.y)};
@@ -213,7 +121,10 @@ __device__ PixelArray operator/(const float &value)
             surf2Dwrite<uchar4>(px, mapSurfaces[mapID], coords.x*sizeof(uchar4), coords.y);
     }
 
-    __device__ float distance(PixelArray<float> &a, PixelArray<float> &b)
+    namespace FocusMap
+    {
+
+    __device__ float distance(float *a, float *b)
     {
         return fmaxf(fmaxf(fabsf(a[0]-b[0]), fabsf(a[1]-b[1])), fabsf(a[2]-b[2]));
     }
@@ -252,28 +163,23 @@ __device__ PixelArray operator/(const float &value)
     class ElementRange
     {
         private:
-        PixelArray<T> minCol{float4{FLT_MAX, FLT_MAX, FLT_MAX, FLT_MAX}};
-        PixelArray<T> maxCol{float4{FLT_MIN, FLT_MIN, FLT_MIN, FLT_MIN}};
+        float minCol[CHANNELS]{FLT_MAX, FLT_MAX, FLT_MAX};
+        float maxCol[CHANNELS]{FLT_MIN, FLT_MIN, FLT_MIN};
         
         public:
-        __device__ void add(PixelArray<T> val)
+        __device__ void add(uchar4 val)
         {
-            minCol[0] = fminf(minCol[0],val[0]);
-            minCol[1] = fminf(minCol[1],val[1]);
-            minCol[2] = fminf(minCol[2],val[2]);
-            maxCol[0] = fmaxf(maxCol[0],val[0]);
-            maxCol[1] = fmaxf(maxCol[1],val[1]);
-            maxCol[2] = fmaxf(maxCol[2],val[2]);
+            auto valArr = reinterpret_cast<unsigned char*>(&val);
+            for(int channel=0; channel<CHANNELS; channel++)
+            {
+                minCol[channel] = fminf(minCol[channel], valArr[channel]);
+                maxCol[channel] = fmaxf(maxCol[channel], valArr[channel]);
+            } 
         }
         __device__ float dispersionAmount()
         {
             return distance(minCol, maxCol); 
         }      
-        __device__ ElementRange& operator+=(const PixelArray<T>& rhs){
-
-          add(rhs);
-          return *this;
-        }
     };
 
     __device__ float focusDispersion(float focus, int2 coords)
@@ -290,7 +196,7 @@ __device__ PixelArray operator/(const float &value)
             int2 focusedCoords = focusCoords(coords, gridID, focus);
             for(int x = focusedCoords.x-radius.x; x <= focusedCoords.x+radius.x; x+=radius.x) 
                 for(int y = focusedCoords.y-radius.y; y <= focusedCoords.y+radius.y; y+=radius.y)
-                   dispersions[i++].add(loadPx<float>(gridID, {x,y}));
+                   dispersions[i++].add(loadPx(gridID, {x,y}));
         }
 
         float finalDispersion{0};
@@ -319,7 +225,7 @@ __device__ PixelArray operator/(const float &value)
         } 
     };
 
-    __global__ void estimateFocusMap()
+    __global__ void estimate()
     {
         int2 coords = getImgCoords();
         if(coordsOutside(coords))
@@ -336,19 +242,42 @@ __device__ PixelArray operator/(const float &value)
         storePxToMap({mapFocus, mapFocus, mapFocus, UCHAR_MAX}, 0, coords);
         //loadPxFromMap(0, coords); 
     }
+    }
+
+    namespace Standard
+    {
+
+    __device__ void addWeighted(float3 *base, half weight, uchar4 value) 
+    {   
+        auto baseArr = reinterpret_cast<float*>(base); 
+        auto valueArr = reinterpret_cast<unsigned char*>(&value); 
+        for(int j=0; j<CHANNELS; j++)
+            //baseArr[j] += static_cast<float>(valueArr[j])*static_cast<float>(weight);
+            baseArr[j] = __fmaf_rn(static_cast<float>(valueArr[j]), weight, baseArr[j]);
+    }
+
+    __device__ uchar4 uch4(float3 *value) 
+    {
+        float *valueArr = reinterpret_cast<float*>(value);
+        uchar4 result;
+        auto data = reinterpret_cast<unsigned char*>(&result);
+        for(int i=0; i<CHANNELS; i++)
+            data[i] = __float2int_rn(valueArr[i]);
+        result.w = UCHAR_MAX;
+        return result;
+    }
 
     template<bool allFocus>
     __global__ void process(half *weights)
     {
+        auto localWeights = localMemory;
+        loadWeightsSync<half>(weights, localWeights); 
+ 
         int2 coords = getImgCoords();
         if(coordsOutside(coords))
             return;
 
-        MemoryPartitioner<half> memoryPartitioner(localMemory);
-        auto localWeights = memoryPartitioner.array(weightsSize());
-        loadWeightsSync<half>(weights, localWeights);  
-        PixelArray<float> sum[VIEW_TOTAL_COUNT];
-        
+        float3 sum[VIEW_TOTAL_COUNT] = {{0,0,0}};        
         int2 focusedCoords;
         int focusValue;
         if constexpr (allFocus)
@@ -361,25 +290,19 @@ __device__ PixelArray operator/(const float &value)
             else
                 focusedCoords = focusCoords(coords, gridID);
 
-            auto px{loadPx<float>(gridID, focusedCoords)};
+            auto px{loadPx(gridID, focusedCoords)};
             for(int viewID=0; viewID<VIEW_TOTAL_COUNT; viewID++)
-                    sum[viewID].addWeighted(localWeights[linearCoords({gridID,viewID}, weightsRes().x)], px);
+                    addWeighted(&sum[viewID], localWeights[linearCoords({gridID,viewID}, weightsRes().x)], px);
         }
 
         for(int viewID=0; viewID<VIEW_TOTAL_COUNT; viewID++)
-            storePx(sum[viewID].uch4(), viewID, coords);
+            storePx(uch4(&sum[viewID]), viewID, coords);
     }
-
-    __device__ half clamp(half value, float minimum, float maximum)
-    {
-        return max(min(value, maximum), minimum);
     }
-
 
     namespace Tensors
     {  
  
-    constexpr int CHANNELS{3};
     constexpr int WARP_WIDTH{32};
     constexpr int WARP_COUNT = 256/WARP_WIDTH;
     constexpr int PIXELS{32}, VIEWS{8}, IMAGES{16};
@@ -435,6 +358,8 @@ __device__ PixelArray operator/(const float &value)
     {
         using namespace nvcuda;
 
+        auto localWeights = localMemory;
+        loadWeightsSync<half>(weights, localWeights); 
         int2 coords = getImgCoords();
         if(coordsOutside(coords))
             return;
@@ -442,14 +367,9 @@ __device__ PixelArray operator/(const float &value)
         const int linearCoords = threadIdx.x+threadIdx.y*blockDim.x;
         const int warpID = linearCoords/WARP_WIDTH;
         const int warpThreadID = linearCoords%WARP_WIDTH;
-        //const int warpCount = blockDim.x*blockDim.y/WARP_WIDTH;
         
-        MemoryPartitioner<half> memoryPartitioner(localMemory);
-        auto localPixelsMemory = memoryPartitioner.array(PIXEL_MATRIX_SIZE*WARP_COUNT);
         const int pixelRowIDInt4{(IMAGES>>3)*warpThreadID};
-        half *currentLocalPixelsMemory = localPixelsMemory+(warpID*PIXEL_MATRIX_SIZE);;
-        auto localWeights = memoryPartitioner.array(weightsSize());
-        loadWeightsSync<half>(weights, localWeights); 
+        half *currentLocalPixelsMemory = localMemory+weightsSize()+(warpID*PIXEL_MATRIX_SIZE);
         
         //ROWSxCOLS
         //PIXELSxIMAGES

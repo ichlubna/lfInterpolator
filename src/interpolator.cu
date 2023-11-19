@@ -249,7 +249,7 @@ void Interpolator::interpolate(std::string outputPath, std::string trajectory, f
     dim3 dimGrid(resolution.x/dimBlock.x+1, resolution.y/dimBlock.y+1, 1);
 
     if(inRange > 0)
-        Kernels::estimateFocusMap<<<dimGrid, dimBlock, sharedSize>>>();
+        Kernels::FocusMap::estimate<<<dimGrid, dimBlock, sharedSize>>>();
     
     std::cout << "Elapsed time: "<< std::endl;
     float avgTime{0};
@@ -271,9 +271,9 @@ void Interpolator::interpolate(std::string outputPath, std::string trajectory, f
         else if(method == "STD")
         {
             if(range > 0)
-                Kernels::process<true><<<dimGrid, dimBlock, sharedSize>>>(reinterpret_cast<half*>(weights));
+                Kernels::Standard::process<true><<<dimGrid, dimBlock, sharedSize>>>(reinterpret_cast<half*>(weights));
             else
-                Kernels::process<false><<<dimGrid, dimBlock, sharedSize>>>(reinterpret_cast<half*>(weights));
+                Kernels::Standard::process<false><<<dimGrid, dimBlock, sharedSize>>>(reinterpret_cast<half*>(weights));
         }
         else
             throw std::runtime_error("The specified interpolation method does not exist!");
