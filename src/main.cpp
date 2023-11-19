@@ -31,7 +31,6 @@ int main(int argc, char **argv)
     float effect = static_cast<float>(args["-s"]);
     if(effect <= 0)
         effect = 3;
-        
 
     if(!args["-i"] || !args["-t"] || !args["-o"] || !args["-m"])
     {

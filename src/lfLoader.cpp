@@ -8,9 +8,9 @@
 const std::set<std::filesystem::path> LfLoader::listPath(std::string path) const
 {
     if(!std::filesystem::exists(path))
-        throw std::runtime_error("The path "+path+" does not exist!");
+        throw std::runtime_error("The path " + path + " does not exist!");
     if(!std::filesystem::is_directory(path))
-        throw std::runtime_error("The path "+path+" does not lead to a directory!");
+        throw std::runtime_error("The path " + path + " does not lead to a directory!");
 
     auto dir = std::filesystem::directory_iterator(path);
     std::set<std::filesystem::path> sorted;
@@ -23,7 +23,7 @@ glm::ivec2 LfLoader::parseFilename(std::string name) const
 {
     auto delimiterPos = name.find('_');
     if(delimiterPos == std::string::npos)
-        throw std::runtime_error("File "+name+" is not named properly as column_row.extension!");
+        throw std::runtime_error("File " + name + " is not named properly as column_row.extension!");
     int extensionPos = name.find('.');
     auto row = name.substr(0, delimiterPos);
     auto col = name.substr(delimiterPos + 1, extensionPos - delimiterPos - 1);
@@ -37,20 +37,20 @@ void LfLoader::loadImage(std::string path, glm::uvec2 coords)
     if(pixels == nullptr)
         throw std::runtime_error("Cannot load image " + path);
     resolution.z = RGBA_CHANNELS;
-    size_t size = resolution.x*resolution.y*resolution.z;
-    grid[coords.x][coords.y] = std::vector<uint8_t>(pixels, pixels+size);
+    size_t size = resolution.x * resolution.y * resolution.z;
+    grid[coords.x][coords.y] = std::vector<uint8_t>(pixels, pixels + size);
 }
 
 void LfLoader::initGrid(glm::uvec2 inColsRows)
 {
-    colsRows = inColsRows+glm::uvec2(1);
+    colsRows = inColsRows + glm::uvec2(1);
     grid.resize(colsRows.x);
     for(auto &row : grid)
         row.resize(colsRows.y);
 }
 
 void LfLoader::loadData(std::string path)
-{  
+{
     auto files = listPath(path);
     if(files.empty())
         throw std::runtime_error("The input directory is empty!");
@@ -61,7 +61,7 @@ void LfLoader::loadData(std::string path)
     for(auto const &file : files)
     {
         auto coords = parseFilename(file);
-        loadImage(path/file, {coords.y, coords.x}); 
-        bar.add(); 
+        loadImage(path / file, {coords.y, coords.x});
+        bar.add();
     }
 }
