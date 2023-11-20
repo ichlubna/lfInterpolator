@@ -13,6 +13,9 @@ __device__ constexpr int VIEW_COUNT{8};
 __device__ constexpr int VIEW_PORTIONS{2};
 __device__ constexpr int VIEW_TOTAL_COUNT{VIEW_PORTIONS * VIEW_COUNT};
 __constant__ int constants[CONSTANTS_COUNT];
+__constant__ float inFocus;
+__constant__ float inRange;
+
 __device__ int2 imgRes()
 {
     return {constants[0], constants[1]};
@@ -45,6 +48,14 @@ __device__ int2 blockRadius()
 {
     return {constants[9], constants[10]};
 }
+__device__ float normalizedFocus()
+{
+    return inFocus;
+}
+__device__ float normalizedRange()
+{
+    return inRange;
+}
 
 __device__ constexpr int MAX_IMAGES{256};
 __device__ constexpr int MAX_SURFACES{256};
@@ -64,7 +75,7 @@ __device__ int2 focusCoords(int2 coords, int imageID)
     return {coords.x + offset.x, coords.y + offset.y};
 }
 
-__device__ int2 focusCoords(int2 coords, int imageID, int focus)
+__device__ int2 focusCoords(int2 coords, int imageID, float focus)
 {
     auto offset = offsets[imageID];
     return {static_cast<int>(coords.x + focus * offset.x), static_cast<int>(coords.y + focus * offset.y)};
@@ -118,6 +129,11 @@ __device__ unsigned char loadPxFromMap(int mapID, int2 coords)
 {
     constexpr int MULT_FOUR_SHIFT{2};
     return surf2Dread<uchar4>(mapSurfaces[mapID], coords.x << MULT_FOUR_SHIFT, coords.y, cudaBoundaryModeClamp).x;
+}
+
+__device__ float loadFocusFromMap(int mapID, int2 coords)
+{
+    return normalizedFocus() + (static_cast<float>(loadPxFromMap(mapID, coords)) / UCHAR_MAX) * normalizedRange();
 }
 
 /*
@@ -233,9 +249,9 @@ class MinDispersion
 {
     private:
         float dispersion{FLT_MAX};
-        int focus{5};
+        float focus{0};
     public:
-        __device__ void add(int newFocus, float newDispersion)
+        __device__ void add(float newFocus, float newDispersion)
         {
             if(newDispersion < dispersion)
             {
@@ -243,7 +259,7 @@ class MinDispersion
                 dispersion = newDispersion;
             }
         }
-        __device__ int getBestFocus()
+        __device__ float getBestFocus()
         {
             return focus;
         }
@@ -255,14 +271,18 @@ __global__ void estimate()
     if(coordsOutside(coords))
         return;
 
-    int step = focusRange() / 32;
+    constexpr int STEPS{32};
+    float step = normalizedRange() / (STEPS-1);
     MinDispersion minimum;
-    for(int f = focus(); f < focus() + focusRange(); f += step)
+    for(int i=0; i < STEPS; i++)
+    {
+        float f = normalizedFocus()+step*i;
         minimum.add(f, focusDispersion(f, coords));
+    }
 
-    int bestFocus = minimum.getBestFocus();
-    float normalizedFocus = (bestFocus - focus()) / static_cast<float>(focusRange());
-    unsigned char mapFocus{static_cast<unsigned char>(round(normalizedFocus * UCHAR_MAX))};
+    float bestFocus = minimum.getBestFocus();
+    float normalizedMapFocus = (bestFocus - normalizedFocus()) / normalizedRange();
+    unsigned char mapFocus{static_cast<unsigned char>(round(normalizedMapFocus * UCHAR_MAX))};
     storePxToMap({mapFocus, mapFocus, mapFocus, UCHAR_MAX}, 0, coords);
     //loadPxFromMap(0, coords);
 }
@@ -303,9 +323,9 @@ __global__ void process(half *weights)
 
     float3 sum[VIEW_TOTAL_COUNT] = {{0, 0, 0}};
     int2 focusedCoords;
-    int focusValue;
+    float focusValue{};
     if constexpr(allFocus)
-        focusValue = round((static_cast<float>(loadPxFromMap(0, coords)) / UCHAR_MAX) * focusRange());
+        focusValue = loadFocusFromMap(0, coords);
 
     for(int gridID = 0; gridID < gridSize(); gridID++)
     {
@@ -333,7 +353,7 @@ constexpr int PIXELS{32}, VIEWS{8}, IMAGES{16};
 constexpr int PIXEL_MATRIX_SIZE{PIXELS * IMAGES};
 
 template<bool allFocus>
-__device__ void loadPixels(int batch, int2 coords, unsigned char *destinationPixels, int focusValue)
+__device__ void loadPixels(int batch, int2 coords, unsigned char *destinationPixels, float focusValue)
 {
     int2 focusedCoords;
     const int batchOffset{batch * IMAGES};
@@ -407,9 +427,9 @@ __global__ void process(half *weights)
             wmma::fill_fragment(matResult[channel + portion * CHANNELS], 0.0f);
 
     uchar4 pixels[IMAGES];
-    int focusValue;
+    float focusValue;
     if constexpr(allFocus)
-        focusValue = round((static_cast<float>(loadPxFromMap(0, coords)) / UCHAR_MAX) * focusRange());
+        focusValue = loadFocusFromMap(0, coords);
 
     const int batchCount{gridSize() >> 4}; // division by IMAGES
     for(int batch = 0; batch < batchCount; batch++)

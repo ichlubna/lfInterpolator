@@ -7,15 +7,15 @@ class Interpolator
     public:
         Interpolator(std::string inputPath);
         ~Interpolator();
-        void interpolate(std::string outputPath, std::string trajectory, float focus, float range, std::string method, float effect);
+        void interpolate(std::string outputPath, std::string trajectory, float focus, float range, std::string method, float effect, float aspect);
 
     private:
         size_t kernelBenchmarkRuns{100};
         std::vector<int *> surfaceInputArrays;
         std::vector<int *> surfaceOutputArrays;
         int *weights;
-        int focus{0};
-        int range{0};
+        float focus{0};
+        float range{0};
         size_t channels{4};
         size_t sharedSize{0};
         glm::ivec2 colsRows;
@@ -23,7 +23,7 @@ class Interpolator
         std::string input;
         void init();
         void loadGPUData();
-        void loadGPUOffsets();
+        void loadGPUOffsets(float aspect, glm::vec4 startEndPoints);
         void loadGPUConstants();
         void loadGPUWeights(glm::vec4 startEndPoints, float effect);
         void selectFocusMapViews(glm::vec4 startEndPoints);

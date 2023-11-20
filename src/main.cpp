@@ -17,11 +17,12 @@ int main(int argc, char **argv)
                           "-i - folder with lf grid images - named as column_row.extension, e.g. 01_12.jpg\n"
                           "-t - trajectory of the camera in normalized coordinates of the grid format: startCol,startRow,endCol,endRow\n"
                           "-s - the amount of the spatial 3D effect - affects how much are views close to the virtual one prioritized (default=3.0)\n"
+                          "-a - aspect ratio of the spacing of the capturing cameras in the grid (horizontal/vertical space) (default=1)\n"
                           "-m - interpolation method:\n"
                           "     STD - standard interpolation kernel\n"
                           "     TEN_WM - WMMA tensor cores\n"
                           "     TEN_OP - optimized memory tensor cores\n"
-                          "The following arguments are pixel offsets of the images in shift & sum\n"
+                          "The following arguments are normalized offsets of the images in shift & sum\n"
                           "-f - focusing value (default=0)\n"
                           "-r - focusing range (will be added to the focusing value) - will produce all-focused result if used\n"
                         };
@@ -31,6 +32,10 @@ int main(int argc, char **argv)
     float effect = static_cast<float>(args["-s"]);
     if(effect <= 0)
         effect = 3;
+    
+    float aspect = static_cast<float>(args["-a"]);
+    if(aspect <= 0)
+        aspect = 1;
 
     if(!args["-i"] || !args["-t"] || !args["-o"] || !args["-m"])
     {
@@ -41,7 +46,7 @@ int main(int argc, char **argv)
     try
     {
         Interpolator interpolator(path);
-        interpolator.interpolate(outputPath, trajectory, focus, range, method, effect);
+        interpolator.interpolate(outputPath, trajectory, focus, range, method, effect, aspect);
     }
     catch(const std::exception &e)
     {

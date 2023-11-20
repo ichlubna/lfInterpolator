@@ -147,8 +147,10 @@ void Interpolator::loadGPUConstants()
     std::vector<int> values{resolution.x, resolution.y,
                             colsRows.x, colsRows.y, 0,
                             colsRows.x * colsRows.y, colsRows.x *colsRows.y *Kernels::VIEW_TOTAL_COUNT,
-                            focus, range, blockRadius.x, blockRadius.y};
+                            static_cast<int>(glm::round(focus*resolution.x)), static_cast<int>(glm::round(range*resolution.x)), blockRadius.x, blockRadius.y};
     cudaMemcpyToSymbol(Kernels::constants, values.data(), values.size() * sizeof(int));
+    cudaMemcpyToSymbol(Kernels::inFocus, &focus, sizeof(float));
+    cudaMemcpyToSymbol(Kernels::inRange, &range, sizeof(float));
 }
 
 std::vector<float> Interpolator::generateWeights(glm::vec2 coords, float effect)
@@ -184,10 +186,15 @@ bool compareDistances(std::pair<float, int> a, std::pair<float, int> b)
     return (a.first < b.first);
 }
 
+glm::vec2 trajectoryCenter(glm::vec4 startEndPoints)
+{
+    return startEndPoints.xy() + (startEndPoints.zw() - startEndPoints.xy()) * 0.5f;
+}
+
 void Interpolator::selectFocusMapViews(glm::vec4 startEndPoints)
 {
     std::vector<std::pair<float, int>> distances;
-    glm::vec2 center = startEndPoints.xy() + (startEndPoints.zw() - startEndPoints.xy()) * 0.5f;
+    glm::vec2 center = trajectoryCenter(startEndPoints);
     for(int col = 0; col < colsRows.x; col++)
         for(int row = 0; row < colsRows.y; row++)
             distances.push_back({glm::distance({col, row}, center), distances.size()});
@@ -216,31 +223,33 @@ void Interpolator::loadGPUWeights(glm::vec4 startEndPoints, float effect)
     cudaMemcpy(weights, weightsMatrix.data(), weightsMatrix.size()*sizeof(half), cudaMemcpyHostToDevice);
 }
 
-void Interpolator::loadGPUOffsets()
+void Interpolator::loadGPUOffsets(float aspect, glm::vec4 startEndPoints)
 {
     std::vector<int2> focusedOffsets;
     std::vector<float2> offsets;
-    glm::vec2 maxOffset{colsRows - glm::ivec2(1)};
-    glm::vec2 center{maxOffset *glm::vec2(0.5)};
+    glm::vec2 center = trajectoryCenter(startEndPoints);
+    float offsetAspect = (static_cast<float>(resolution.x)/resolution.y) / aspect;
     for(int col = 0; col < colsRows.x; col++)
         for(int row = 0; row < colsRows.y; row++)
         {
             glm::vec2 position{col, row};
-            glm::vec2 offset{(center - position) / maxOffset};
+            glm::vec2 offset{(center - position)/glm::vec2(colsRows)};
+            offset *= resolution.xy();
+            offset.y *= offsetAspect;
             offsets.push_back({offset.x, offset.y});
-            glm::ivec2 rounded = glm::round(offset * static_cast<float>(focus));
+            glm::ivec2 rounded = glm::round(offset * glm::vec2(focus));
             focusedOffsets.push_back({rounded.x, rounded.y});
         }
     cudaMemcpyToSymbol(Kernels::focusedOffsets, focusedOffsets.data(), focusedOffsets.size() * sizeof(int2));
     cudaMemcpyToSymbol(Kernels::offsets, offsets.data(), offsets.size() * sizeof(float2));
 }
 
-void Interpolator::interpolate(std::string outputPath, std::string trajectory, float inFocus, float inRange, std::string method, float effect)
+void Interpolator::interpolate(std::string outputPath, std::string trajectory, float inFocus, float inRange, std::string method, float effect, float aspect)
 {
     focus = inFocus;
     range = inRange;
-    loadGPUOffsets();
     auto trajectoryPoints = interpretTrajectory(trajectory);
+    loadGPUOffsets(aspect, trajectoryPoints);
     loadGPUWeights(trajectoryPoints, effect);
     selectFocusMapViews(trajectoryPoints);
     loadGPUConstants();
@@ -249,8 +258,12 @@ void Interpolator::interpolate(std::string outputPath, std::string trajectory, f
     dim3 dimGrid(resolution.x / dimBlock.x + 1, resolution.y / dimBlock.y + 1, 1);
 
     if(inRange > 0)
+    {
+        std::cout << "Estimating focus map..." << std::endl;
         Kernels::FocusMap::estimate <<< dimGrid, dimBlock, sharedSize>>>();
+    }
 
+    std::cout << "Rendering views..." << std::endl;
     std::cout << "Elapsed time: " << std::endl;
     float avgTime{0};
     for(size_t i = 0; i < kernelBenchmarkRuns; i++)
