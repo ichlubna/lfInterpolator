@@ -4,6 +4,3 @@
 [submodule "src/libs/loadingBar"]
 	path = src/libs/loadingBar
 	url = https://github.com/ichlubna/loadingBargit
-[submodule "src/libs/CudaTensorLibrary"]
-	path = src/libs/CudaTensorLibrary
-	url = https://github.com/ikulaatfit/CudaTensorLibrary.git

@@ -21,7 +21,6 @@ int main(int argc, char **argv)
                           "-m - interpolation method:\n"
                           "     STD - standard interpolation kernel\n"
                           "     TEN_WM - WMMA tensor cores\n"
-                          "     TEN_OP - optimized memory tensor cores\n"
                           "The following arguments are normalized offsets of the images in shift & sum\n"
                           "-f - focusing value (default=0)\n"
                           "-r - focusing range (will be added to the focusing value) - will produce all-focused result if used\n"

@@ -1,7 +1,6 @@
 #include <glm/glm.hpp>
 #include <cuda_fp16.h>
 #include <mma.h>
-//#include "libs/CudaTensorLibrary/tensor.cu"
 
 namespace Kernels
 {
@@ -10,8 +9,9 @@ __device__ constexpr bool GUESS_HANDLES{false};
 __device__ constexpr int CHANNELS{3};
 __device__ constexpr int CONSTANTS_COUNT{11};
 __device__ constexpr int VIEW_COUNT{8};
-__device__ constexpr int VIEW_PORTIONS{2};
+__device__ constexpr int VIEW_PORTIONS{8};
 __device__ constexpr int VIEW_TOTAL_COUNT{VIEW_PORTIONS * VIEW_COUNT};
+//__device__ constexpr int VIEW_TOTAL_COUNT{72};
 __constant__ int constants[CONSTANTS_COUNT];
 __constant__ float inFocus;
 __constant__ float inRange;
@@ -168,37 +168,8 @@ __device__ float distance(float *a, float *b)
 {
     return fmaxf(fmaxf(fabsf(a[0] - b[0]), fabsf(a[1] - b[1])), fabsf(a[2] - b[2]));
 }
-/*
-    template<typename T>
- class ElementRange
-        {
-            private:
-            float n{0};
-            PixelArray<T> m;
-            float m2{0};
 
-            public:
-            __device__ void add(PixelArray<T> val)
-            {
-               float dist = distance(m, val);
-               n++;
-               PixelArray delta = val-m;
-               m += delta/static_cast<float>(n);
-               //m2 += distance * Pixel::distance(m, val);
-               m2 = __fmaf_rn(dist, distance(m, val), m2);
 
-            }
-            __device__ float dispersionAmount()
-            {
-                return m2/(n-1);
-            }
-            __device__ ElementRange& operator+=(const PixelArray<T>& rhs){
-
-              add(rhs);
-              return *this;
-            }
-        };
-*/
 template<typename T>
 class ElementRange
 {
@@ -284,8 +255,35 @@ __global__ void estimate()
     float normalizedMapFocus = (bestFocus - normalizedFocus()) / normalizedRange();
     unsigned char mapFocus{static_cast<unsigned char>(round(normalizedMapFocus * UCHAR_MAX))};
     storePxToMap({mapFocus, mapFocus, mapFocus, UCHAR_MAX}, 0, coords);
-    //loadPxFromMap(0, coords);
 }
+
+__global__ void filter()
+{
+    int2 coords = getImgCoords();
+    if(coordsOutside(coords))
+        return;
+
+    int2 radius = blockRadius();
+    radius.x /= 10;
+    radius.y /=10;
+    float avgValue{0};
+    int count{0};
+    for(int x=coords.x-radius.x; x<coords.x+radius.x; x++)
+        for(int y=coords.y-radius.y; y<coords.y+radius.y; y++)
+        {
+            avgValue += loadPxFromMap(0, {x,y});
+            count++;
+        }
+    avgValue /= count; 
+    unsigned char val = static_cast<unsigned char>(round(avgValue));
+    storePxToMap({val, val, val, UCHAR_MAX}, 1, coords); 
+}
+
+}
+
+__device__ half clampColorValue(half val)
+{
+    return min(max(val,0.0f),255.0f);
 }
 
 namespace Standard
@@ -325,7 +323,7 @@ __global__ void process(half *weights)
     int2 focusedCoords;
     float focusValue{};
     if constexpr(allFocus)
-        focusValue = loadFocusFromMap(0, coords);
+        focusValue = loadFocusFromMap(1, coords);
 
     for(int gridID = 0; gridID < gridSize(); gridID++)
     {
@@ -392,7 +390,7 @@ __device__ void storePortionViews(int portion, int2 coords, half *pixels)
     {
         uchar4 color{0, 0, 0, 255};
         for(int channel = 0; channel < CHANNELS; channel++)
-            reinterpret_cast<unsigned char * >(&color)[channel] = reinterpret_cast<half * >(pixels)[VIEWS * channel + viewID];
+            reinterpret_cast<unsigned char * >(&color)[channel] = pixels[VIEWS * channel + viewID];
         storePx(color, viewID + portion * VIEW_COUNT, coords);
     }
 }

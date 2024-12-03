@@ -228,6 +228,7 @@ void Interpolator::loadGPUOffsets(float aspect, glm::vec4 startEndPoints)
     std::vector<int2> focusedOffsets;
     std::vector<float2> offsets;
     glm::vec2 center = trajectoryCenter(startEndPoints);
+    //glm::vec2 center{0.071,0.071}; center*=colsRows-1;
     float offsetAspect = (static_cast<float>(resolution.x)/resolution.y) / aspect;
     for(int col = 0; col < colsRows.x; col++)
         for(int row = 0; row < colsRows.y; row++)
@@ -261,6 +262,7 @@ void Interpolator::interpolate(std::string outputPath, std::string trajectory, f
     {
         std::cout << "Estimating focus map..." << std::endl;
         Kernels::FocusMap::estimate <<< dimGrid, dimBlock, sharedSize>>>();
+        Kernels::FocusMap::filter <<< dimGrid, dimBlock, sharedSize>>>();
     }
 
     std::cout << "Rendering views..." << std::endl;
@@ -276,10 +278,6 @@ void Interpolator::interpolate(std::string outputPath, std::string trajectory, f
                 Kernels::Tensors::process<true> <<< dimGrid, dimBlock, tensorSharedSize>>>(reinterpret_cast<half * >(weights));
             else
                 Kernels::Tensors::process<false> <<< dimGrid, dimBlock, tensorSharedSize>>>(reinterpret_cast<half *>(weights));
-        }
-        else if(method == "TEN_OP")
-        {
-            //Kernels::processTensor<<<dimGrid, dimBlock, sharedSize>>>(reinterpret_cast<half*>(weights));
         }
         else if(method == "STD")
         {
@@ -303,7 +301,7 @@ void Interpolator::storeResults(std::string path)
     std::cout << "Storing results..." << std::endl;
     int count = Kernels::VIEW_TOTAL_COUNT;
     if(range > 0)
-        count += 1;
+        count += Kernels::MAP_COUNT;
     LoadingBar bar(count);
     std::vector<uint8_t> data(resolution.x * resolution.y * resolution.z, 255);
     for(int i = 0; i < count; i++)

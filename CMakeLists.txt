@@ -26,7 +26,7 @@ include_directories(SYSTEM ${CMAKE_SOURCE_DIR}/src)
 add_executable(${PROJECT_NAME} ${SOURCES})
 target_compile_options(${PROJECT_NAME} PRIVATE -Wall)
 target_compile_options(${PROJECT_NAME} PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xcudafe --diag_suppress=esa_on_defaulted_function_ignored>)
-set_property(TARGET ${PROJECT_NAME} PROPERTY CUDA_ARCHITECTURES 75)
+set_property(TARGET ${PROJECT_NAME} PROPERTY CUDA_ARCHITECTURES 86)
 
 add_custom_target(format WORKING_DIRECTORY ${CMAKE_PROJECT_DIR})
 add_custom_command(TARGET format COMMAND ${ASTYLE_BINARY} ${CMAKE_SOURCE_DIR}/src/*.cpp,*.h,*.cu ${ASTYLE_OPTIONS})
